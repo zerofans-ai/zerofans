@@ -1,0 +1,24 @@
+{
+  "name": "zerofans-web",
+  "main": "worker.js",
+  "compatibility_date": "2026-03-03",
+  "routes": [
+    {
+      "pattern": "zero-fans.com/*",
+      "zone_name": "zero-fans.com"
+    },
+    {
+      "pattern": "www.zero-fans.com/*",
+      "zone_name": "zero-fans.com"
+    }
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "html_handling": "auto-trailing-slash"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

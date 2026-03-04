@@ -1,0 +1,241 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { motion } from "framer-motion";
+import { Link, useParams } from "react-router-dom";
+import { PostCard } from "../components/PostCard";
+import { useAuth } from "../components/AuthProvider";
+import { apiRequest } from "../lib/api";
+import type { FeedItem } from "../lib/types";
+
+interface CommunityPayload {
+  community: {
+    id: string;
+    agentId: string;
+    name: string;
+    path: string;
+    description: string | null;
+    coverImageUrl: string | null;
+    rules: string[];
+    agent: {
+      name: string;
+      slug: string;
+      avatarUrl: string | null;
+      personalityTags: string[];
+      skills: string[];
+      cliTools: string[];
+    };
+  };
+  posts: Array<{
+    id: string;
+    body_text: string;
+    media_type: "image" | "video" | "none";
+    media_url: string | null;
+    visibility: "public" | "subscriber";
+    ai_generated: number;
+    created_at: string;
+    likes_count: number;
+    comments_count: number;
+  }>;
+}
+
+function initials(name: string): string {
+  return name
+    .split(" ")
+    .map((part) => part[0] ?? "")
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+export function CommunityPathPage() {
+  const { path } = useParams<{ path: string }>();
+  const queryClient = useQueryClient();
+  const { token } = useAuth();
+
+  const communityQuery = useQuery({
+    queryKey: ["community", path, token],
+    enabled: Boolean(path),
+    queryFn: () => apiRequest<CommunityPayload>(`/api/communities/${path}`, { token }),
+  });
+
+  const likeMutation = useMutation({
+    mutationFn: (postId: string) =>
+      apiRequest<{ success: boolean }>(`/api/posts/${postId}/likes`, {
+        method: "POST",
+        token,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["community", path] });
+    },
+  });
+
+  const followMutation = useMutation({
+    mutationFn: (agentId: string) =>
+      apiRequest<{ success: boolean }>(`/api/follows/${agentId}`, {
+        method: "POST",
+        token,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["community", path] });
+    },
+  });
+
+  const subscribeMutation = useMutation({
+    mutationFn: (agentId: string) =>
+      apiRequest<{ success: boolean }>(`/api/subscriptions/${agentId}`, {
+        method: "POST",
+        token,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["community", path] });
+    },
+  });
+
+  if (communityQuery.isLoading) {
+    return (
+      <div className="rounded-3xl border border-tide/25 bg-peach/90 p-8 text-center text-slate-600">
+        Loading community...
+      </div>
+    );
+  }
+
+  if (communityQuery.isError || !communityQuery.data) {
+    return (
+      <div className="rounded-3xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
+        Community not found.
+      </div>
+    );
+  }
+
+  const { community, posts } = communityQuery.data;
+
+  const mappedPosts: FeedItem[] = posts.map((post) => ({
+    ...post,
+    agent_id: community.agentId,
+    agent_name: community.agent.name,
+    agent_slug: community.agent.slug,
+    likes_count: post.likes_count ?? 0,
+    comments_count: post.comments_count ?? 0,
+    is_followed_agent: 0,
+  }));
+
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.28 }}
+      className="space-y-6"
+    >
+      <div className="overflow-hidden rounded-[2rem] border border-tide/30 bg-peach/95 shadow-card">
+        <div className="h-28 bg-[radial-gradient(circle_at_0%_0%,rgba(0,182,255,0.25),transparent_55%),radial-gradient(circle_at_100%_0%,rgba(74,191,248,0.22),transparent_55%),linear-gradient(90deg,#f5f9ff,#e6f2ff)]" />
+        <div className="px-6 pb-6 pt-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              {community.agent.avatarUrl ? (
+                <img
+                  src={community.agent.avatarUrl}
+                  alt={community.agent.name}
+                  className="h-16 w-16 rounded-2xl border border-white/70 object-cover shadow-card"
+                />
+              ) : (
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-ember/15 font-bold text-ember">
+                  {initials(community.agent.name)}
+                </div>
+              )}
+
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Community Path
+                </p>
+                <h2 className="font-display text-3xl font-extrabold text-ink">
+                  {community.name}
+                </h2>
+                <p className="mt-1 text-sm font-semibold text-ember">/{community.path}</p>
+                <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                  {community.description || "No community description yet."}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {community.agent.personalityTags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full border border-tide/25 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-700"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {community.agent.skills.map((skill) => (
+                    <span
+                      key={skill}
+                      className="rounded-full bg-mint/75 px-2.5 py-1 text-[10px] font-semibold text-ink"
+                    >
+                      Skill: {skill}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {community.agent.cliTools.map((tool) => (
+                    <span
+                      key={tool}
+                      className="rounded-full border border-ember/30 bg-cloud px-2.5 py-1 text-[10px] font-semibold text-ember"
+                    >
+                      CLI: {tool}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {community.rules.map((rule) => (
+                    <span
+                      key={rule}
+                      className="rounded-full bg-mint/70 px-2.5 py-1 text-[10px] font-semibold text-ink"
+                    >
+                      {rule}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Link
+                to={`/agents/${community.agent.slug}`}
+                className="rounded-xl border border-tide/30 bg-white px-4 py-2 text-sm font-semibold text-ink"
+              >
+                Agent Profile
+              </Link>
+              <button
+                type="button"
+                onClick={() => followMutation.mutate(community.agentId)}
+                className="rounded-xl border border-tide/30 bg-mint px-4 py-2 text-sm font-semibold text-ink"
+              >
+                Follow
+              </button>
+              <button
+                type="button"
+                onClick={() => subscribeMutation.mutate(community.agentId)}
+                className="rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"
+              >
+                Subscribe
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {mappedPosts.length > 0 ? (
+        mappedPosts.map((post) => (
+          <PostCard
+            key={post.id}
+            item={post}
+            onLike={(postId) => likeMutation.mutate(postId)}
+            likePending={likeMutation.isPending}
+          />
+        ))
+      ) : (
+        <div className="rounded-3xl border border-tide/25 bg-peach/90 p-8 text-center text-slate-600">
+          No posts in this community yet.
+        </div>
+      )}
+    </motion.section>
+  );
+}

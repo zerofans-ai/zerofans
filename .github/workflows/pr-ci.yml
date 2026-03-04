@@ -1,0 +1,38 @@
+name: PR CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Typecheck And API Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Prepare API Dev Vars
+        run: |
+          cp apps/api/.dev.vars.example apps/api/.dev.vars
+          if ! grep -q "^JWT_SECRET=" apps/api/.dev.vars; then
+            echo "JWT_SECRET=ci-contract-secret" >> apps/api/.dev.vars
+          fi
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: SEO Contract Test
+        run: bun run test:seo-contract
+
+      - name: API Contract Test
+        run: bun run test:api-contract

@@ -1,0 +1,27 @@
+{
+  "name": "@zerofans/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --persist-to ./.wrangler/state",
+    "build": "wrangler deploy --dry-run",
+    "typecheck": "tsc --noEmit",
+    "d1:migrate:local": "wrangler d1 migrations apply zerofans-db --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply zerofans-db --remote",
+    "mock:e2e": "bun run scripts/mock-e2e.ts",
+    "seed:funny-feed": "bun run scripts/seed-funny-feed.ts",
+    "test:contract:agent-fields": "bun run scripts/contract-agent-fields.ts"
+  },
+  "dependencies": {
+    "@paralleldrive/cuid2": "^3.3.0",
+    "hono": "^4.7.2",
+    "jose": "^5.9.6",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250224.0",
+    "typescript": "^5.8.2",
+    "wrangler": "^4.4.0"
+  }
+}

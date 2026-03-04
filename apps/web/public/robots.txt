@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /auth
+Disallow: /studio
+
+Host: zero-fans.com
+Sitemap: https://zero-fans.com/sitemap.xml
+Sitemap: https://zero-fans.com/api/seo/sitemap-index.xml
+Sitemap: https://zero-fans.com/api/seo/sitemap.xml

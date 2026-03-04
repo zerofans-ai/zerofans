@@ -1,0 +1,109 @@
+name: Production SEO Smoke
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      site_url:
+        description: "Production site origin (for example: https://www.zeroclawlabs.ai)"
+        required: false
+        default: "https://www.zeroclawlabs.ai"
+
+jobs:
+  seo-smoke:
+    name: Live SEO Smoke Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve Site URL
+        id: resolve
+        shell: bash
+        env:
+          INPUT_SITE_URL: ${{ github.event.inputs.site_url }}
+          VAR_SITE_URL: ${{ vars.PRODUCTION_SITE_URL }}
+        run: |
+          set -euo pipefail
+
+          SITE_URL="${INPUT_SITE_URL:-}"
+          if [[ -z "${SITE_URL}" ]]; then
+            SITE_URL="${VAR_SITE_URL:-}"
+          fi
+          if [[ -z "${SITE_URL}" ]]; then
+            SITE_URL="https://www.zeroclawlabs.ai"
+          fi
+          SITE_URL="${SITE_URL%/}"
+
+          echo "site_url=${SITE_URL}" >> "$GITHUB_OUTPUT"
+          echo "Using site URL: ${SITE_URL}"
+
+      - name: Run Live SEO Smoke Assertions
+        shell: bash
+        env:
+          SITE_URL: ${{ steps.resolve.outputs.site_url }}
+        run: |
+          set -euo pipefail
+
+          TMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TMP_DIR}"' EXIT
+
+          EXPECTED_HOST="$(echo "${SITE_URL}" | sed -E 's#^https?://##; s#/.*$##')"
+          EXPECTED_HOST_REGEX="$(printf '%s\n' "${EXPECTED_HOST}" | sed -E 's/[][(){}.^$*+?|\\]/\\&/g')"
+
+          fetch() {
+            local url="$1"
+            local out="$2"
+            curl -fsSL --retry 3 --retry-delay 2 "${url}" -o "${out}"
+          }
+
+          fetch "${SITE_URL}/robots.txt" "${TMP_DIR}/robots.txt"
+          fetch "${SITE_URL}/sitemap.xml" "${TMP_DIR}/static-sitemap.xml"
+          fetch "${SITE_URL}/api/seo/sitemap.xml" "${TMP_DIR}/dynamic-sitemap-alias.xml"
+          fetch "${SITE_URL}/api/seo/sitemap-index.xml" "${TMP_DIR}/dynamic-sitemap-index.xml"
+
+          grep -Eq "^Host:[[:space:]]*${EXPECTED_HOST_REGEX}$" "${TMP_DIR}/robots.txt"
+          grep -F "Sitemap: ${SITE_URL}/sitemap.xml" "${TMP_DIR}/robots.txt"
+          grep -F "Sitemap: ${SITE_URL}/api/seo/sitemap-index.xml" "${TMP_DIR}/robots.txt"
+
+          grep -F "<loc>${SITE_URL}/</loc>" "${TMP_DIR}/static-sitemap.xml"
+          grep -F "<loc>${SITE_URL}/community</loc>" "${TMP_DIR}/static-sitemap.xml"
+
+          grep -F "<sitemapindex" "${TMP_DIR}/dynamic-sitemap-alias.xml"
+          grep -F "<sitemapindex" "${TMP_DIR}/dynamic-sitemap-index.xml"
+          grep -F "<loc>${SITE_URL}/api/seo/sitemaps/core.xml</loc>" "${TMP_DIR}/dynamic-sitemap-index.xml"
+
+          if grep -oE '<loc>https?://[^<]+' "${TMP_DIR}/dynamic-sitemap-index.xml" | sed 's#<loc>##' | grep -Ev "^${SITE_URL}/"; then
+            echo "Detected sitemap index host drift away from ${SITE_URL}"
+            exit 1
+          fi
+
+          CORE_PATH="$(grep -oE '/api/seo/sitemaps/core\.xml' "${TMP_DIR}/dynamic-sitemap-index.xml" | head -n1 || true)"
+          AGENTS_PATH="$(grep -oE '/api/seo/sitemaps/agents/[0-9]+' "${TMP_DIR}/dynamic-sitemap-index.xml" | head -n1 || true)"
+          COMMUNITIES_PATH="$(grep -oE '/api/seo/sitemaps/communities/[0-9]+' "${TMP_DIR}/dynamic-sitemap-index.xml" | head -n1 || true)"
+          POSTS_PATH="$(grep -oE '/api/seo/sitemaps/posts/[0-9]+' "${TMP_DIR}/dynamic-sitemap-index.xml" | head -n1 || true)"
+
+          if [[ -n "${CORE_PATH}" ]]; then
+            fetch "${SITE_URL}${CORE_PATH}" "${TMP_DIR}/core.xml"
+            grep -F "<urlset" "${TMP_DIR}/core.xml"
+          else
+            echo "Core sitemap path missing from dynamic sitemap index"
+            exit 1
+          fi
+
+          if [[ -n "${AGENTS_PATH}" ]]; then
+            fetch "${SITE_URL}${AGENTS_PATH}" "${TMP_DIR}/agents.xml"
+            grep -F "<urlset" "${TMP_DIR}/agents.xml"
+          fi
+
+          if [[ -n "${COMMUNITIES_PATH}" ]]; then
+            fetch "${SITE_URL}${COMMUNITIES_PATH}" "${TMP_DIR}/communities.xml"
+            grep -F "<urlset" "${TMP_DIR}/communities.xml"
+          fi
+
+          if [[ -n "${POSTS_PATH}" ]]; then
+            fetch "${SITE_URL}${POSTS_PATH}" "${TMP_DIR}/posts.xml"
+            grep -F "<urlset" "${TMP_DIR}/posts.xml"
+          fi
+
+          echo "Production SEO smoke checks passed for ${SITE_URL}"
