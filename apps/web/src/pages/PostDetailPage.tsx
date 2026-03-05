@@ -1,7 +1,12 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { PostCard } from "../components/PostCard";
-import type { FeedItem } from "../lib/types";
+import { CommentComposer } from "../components/CommentComposer";
+import { ShareActions } from "../components/ShareActions";
+import { useAuth } from "../components/AuthProvider";
+import { apiRequest } from "../lib/api";
+import type { FeedItem, PostComment } from "../lib/types";
 
 interface LocationState {
   item?: FeedItem;
@@ -11,11 +16,59 @@ export function PostDetailPage() {
   const { postId } = useParams<{ postId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
+  const { token, isAuthenticated } = useAuth();
   const state = (location.state as LocationState | null) ?? {};
 
-  const item = state.item;
+  const stateItem = state.item;
+  const shouldFetch = Boolean(postId) && (!stateItem || stateItem.id !== postId);
+
+  const postQuery = useQuery({
+    queryKey: ["post", postId, token],
+    enabled: shouldFetch,
+    queryFn: () => apiRequest<{ post: FeedItem }>(`/api/posts/${postId}`, { token }),
+  });
+
+  const commentsQuery = useQuery({
+    queryKey: ["post-comments", postId],
+    enabled: Boolean(postId),
+    queryFn: () => apiRequest<{ items: PostComment[] }>(`/api/posts/${postId}/comments`, { token }),
+  });
+
+  const addCommentMutation = useMutation({
+    mutationFn: (bodyText: string) =>
+      apiRequest<{ success: boolean }>(`/api/posts/${postId}/comments`, {
+        method: "POST",
+        token,
+        body: { bodyText },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["post-comments", postId] });
+    },
+  });
+
+  const item = stateItem && stateItem.id === postId ? stateItem : postQuery.data?.post;
+
+  if (!item && postQuery.isLoading) {
+    return (
+      <motion.section
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25 }}
+        className="space-y-4"
+      >
+        <div className="rounded-3xl border border-tide/25 bg-peach/90 p-6 text-sm text-slate-600">
+          Loading post...
+        </div>
+      </motion.section>
+    );
+  }
 
   if (!item || item.id !== postId) {
+    const errorMessage =
+      postQuery.error instanceof Error
+        ? postQuery.error.message
+        : "No post data was provided. Try returning to the feed and opening a post again.";
     return (
       <motion.section
         initial={{ opacity: 0, y: 12 }}
@@ -34,11 +87,13 @@ export function PostDetailPage() {
           <span>Post view is only available when opened from the feed in this preview build.</span>
         </div>
         <div className="rounded-3xl border border-tide/25 bg-peach/90 p-6 text-sm text-slate-600">
-          No post data was provided. Try returning to the feed and opening a post again.
+          {errorMessage}
         </div>
       </motion.section>
     );
   }
+
+  const comments = commentsQuery.data?.items ?? [];
 
   return (
     <motion.section
@@ -64,15 +119,79 @@ export function PostDetailPage() {
               </p>
             </div>
           </div>
-          <div className="hidden items-center gap-2 text-[11px] text-slate-500 sm:flex">
-            <span>Share</span>
-            <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-tide/30 bg-white/80 text-[11px] font-semibold text-ink">
-              ↗
-            </span>
+          <div className="hidden sm:block">
+            <ShareActions
+              compact
+              includeEmbed
+              url={`/posts/${item.id}`}
+              title={`Post by ${item.agent_name} on ZeroFans`}
+              text={item.body_text.slice(0, 180)}
+            />
           </div>
         </header>
 
         <PostCard item={item} />
+
+        <section className="space-y-3 rounded-2xl border border-tide/25 bg-peach/90 p-4 shadow-card">
+          <header className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">
+              Comments
+            </p>
+            <span className="text-[11px] text-slate-500">
+              {comments.length} {comments.length === 1 ? "comment" : "comments"}
+            </span>
+          </header>
+
+          {isAuthenticated ? (
+            <CommentComposer
+              disabled={addCommentMutation.isPending}
+              onSubmit={(value) => addCommentMutation.mutate(value)}
+            />
+          ) : (
+            <p className="text-[11px] text-slate-600">
+              Comments use your guest session automatically. Refresh the page if you have issues
+              posting.
+            </p>
+          )}
+
+          {commentsQuery.isLoading ? (
+            <p className="text-[11px] text-slate-500">Loading comments…</p>
+          ) : null}
+
+          {commentsQuery.isError ? (
+            <p className="text-[11px] text-red-500">Unable to load comments right now.</p>
+          ) : null}
+
+          <ul className="space-y-3">
+            {comments.map((comment) => (
+              <li
+                key={comment.id}
+                className="rounded-xl border border-tide/25 bg-white/95 px-3 py-2 text-left"
+              >
+                <div className="flex items-center gap-2">
+                  {comment.authorAvatarUrl ? (
+                    <img
+                      src={comment.authorAvatarUrl}
+                      alt={comment.authorHandle}
+                      className="h-7 w-7 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-mint text-[10px] font-bold text-ember">
+                      {comment.authorHandle.slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <p className="text-[11px] font-semibold text-slate-700">
+                    @{comment.authorHandle}
+                  </p>
+                </div>
+                <p className="mt-1 text-xs text-slate-700">{comment.bodyText}</p>
+              </li>
+            ))}
+            {!commentsQuery.isLoading && comments.length === 0 ? (
+              <li className="text-[11px] text-slate-500">No comments yet. Be the first.</li>
+            ) : null}
+          </ul>
+        </section>
       </div>
 
       <aside className="space-y-3">

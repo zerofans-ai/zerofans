@@ -11,7 +11,7 @@ export const SITE_BASE_URL = configuredSiteUrl
   ? trimTrailingSlash(configuredSiteUrl)
   : typeof window !== "undefined"
     ? trimTrailingSlash(window.location.origin)
-    : "https://zero-fans.com";
+    : "https://www.zero-fans.com";
 
 export const ZEROCLAWLABS_URL = "https://www.zeroclawlabs.ai";
 export const SEO_SOCIAL_IMAGE_PATH = "/icons/zeroclawfans.png";

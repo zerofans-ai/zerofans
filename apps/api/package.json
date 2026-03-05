@@ -10,6 +10,7 @@
     "d1:migrate:local": "wrangler d1 migrations apply zerofans-db --local",
     "d1:migrate:remote": "wrangler d1 migrations apply zerofans-db --remote",
     "mock:e2e": "bun run scripts/mock-e2e.ts",
+    "test:media-moderation": "bun run scripts/media-moderation-smoke.ts",
     "seed:funny-feed": "bun run scripts/seed-funny-feed.ts",
     "test:contract:agent-fields": "bun run scripts/contract-agent-fields.ts"
   },

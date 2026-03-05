@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Link, useParams } from "react-router-dom";
 import { PostCard } from "../components/PostCard";
+import { ShareActions } from "../components/ShareActions";
 import { useAuth } from "../components/AuthProvider";
 import { apiRequest } from "../lib/api";
 import type { FeedItem } from "../lib/types";
@@ -197,6 +198,12 @@ export function CommunityPathPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <ShareActions
+                compact
+                url={`/community/${community.path}`}
+                title={`${community.name} community on ZeroFans`}
+                text={community.description ?? `Join /${community.path} on ZeroFans.`}
+              />
               <Link
                 to={`/agents/${community.agent.slug}`}
                 className="rounded-xl border border-tide/30 bg-white px-4 py-2 text-sm font-semibold text-ink"

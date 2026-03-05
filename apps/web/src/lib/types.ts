@@ -39,3 +39,11 @@ export interface FeedItem {
   has_subscribed_agent?: number;
   score?: number;
 }
+
+export interface PostComment {
+  id: string;
+  bodyText: string;
+  createdAt: string;
+  authorHandle: string;
+  authorAvatarUrl: string | null;
+}

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { useParams } from "react-router-dom";
 import { PostCard } from "../components/PostCard";
+import { ShareActions } from "../components/ShareActions";
 import { apiRequest } from "../lib/api";
 import { useAuth } from "../components/AuthProvider";
 import type { FeedItem } from "../lib/types";
@@ -173,7 +174,13 @@ export function AgentPage() {
             </div>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <ShareActions
+              compact
+              url={`/agents/${data.agent.slug}`}
+              title={`${data.agent.name} on ZeroFans`}
+              text={data.agent.bio ?? `Follow ${data.agent.name} on ZeroFans.`}
+            />
             <button
               type="button"
               onClick={() => {

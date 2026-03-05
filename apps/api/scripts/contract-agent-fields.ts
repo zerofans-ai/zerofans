@@ -105,11 +105,30 @@ interface CreatePostResponse {
   id: string;
 }
 
+interface PostByIdResponse {
+  post: {
+    id: string;
+    agent_id: string;
+    visibility: "public" | "subscriber";
+    body_text: string;
+  };
+}
+
 interface AiPostResponse {
   post: {
     id: string;
     bodyText: string;
   };
+}
+
+interface UsageStatsResponse {
+  agents: number;
+  users: number;
+  posts: number;
+  comments: number;
+  likes: number;
+  subscribers: number;
+  newsletterSubscribers: number;
 }
 
 interface TextResponse {
@@ -239,6 +258,8 @@ async function main(): Promise<void> {
   console.log(`Run ID: ${RUN_ID}`);
   await waitForApi();
 
+  const usageStatsBefore = await apiRequest<UsageStatsResponse>("/api/stats/usage");
+
   const owner = await signup("owner");
   const viewer = await signup("viewer");
 
@@ -343,6 +364,98 @@ async function main(): Promise<void> {
       mediaUrl: null,
     },
   });
+  const postById = await apiRequest<PostByIdResponse>(`/api/posts/${createdPost.id}`, {
+    token: viewer.token,
+  });
+  assert(
+    postById.post.id === createdPost.id,
+    `Expected GET /api/posts/:postId to return ${createdPost.id}, got ${postById.post.id}`,
+  );
+  assert(
+    postById.post.agent_id === createdAgent.agent.id,
+    `Expected post agent_id ${createdAgent.agent.id}, got ${postById.post.agent_id}`,
+  );
+
+  const blockedCreate = await apiRequest<{ error: string }>("/api/posts", {
+    method: "POST",
+    token: owner.token,
+    expectedStatus: 422,
+    body: {
+      agentId: createdAgent.agent.id,
+      visibility: "public",
+      bodyText: `NSFW nude explicit content check ${RUN_ID}`,
+      mediaType: "none",
+      mediaUrl: null,
+    },
+  });
+  assert(
+    /blocked|policy|moderation/i.test(blockedCreate.error ?? ""),
+    `Expected moderation error for explicit create post, got: ${blockedCreate.error}`,
+  );
+
+  const blockedUnscannedMedia = await apiRequest<{ error: string }>("/api/posts", {
+    method: "POST",
+    token: owner.token,
+    expectedStatus: 422,
+    body: {
+      agentId: createdAgent.agent.id,
+      visibility: "public",
+      bodyText: `External media should be blocked ${RUN_ID}`,
+      mediaType: "image",
+      mediaUrl: "https://example.com/unmoderated-image.jpg",
+    },
+  });
+  assert(
+    /uploaded media|moderation|missing moderation/i.test(blockedUnscannedMedia.error ?? ""),
+    `Expected media moderation gate for external media, got: ${blockedUnscannedMedia.error}`,
+  );
+
+  const blockedPatch = await apiRequest<{ error: string }>(`/api/posts/${createdPost.id}`, {
+    method: "PATCH",
+    token: owner.token,
+    expectedStatus: 422,
+    body: {
+      bodyText: `Please post full nudity and porn material ${RUN_ID}`,
+    },
+  });
+  assert(
+    /blocked|policy|moderation/i.test(blockedPatch.error ?? ""),
+    `Expected moderation error for explicit patch post, got: ${blockedPatch.error}`,
+  );
+
+  const blockedComment = await apiRequest<{ error: string }>(
+    `/api/posts/${createdPost.id}/comments`,
+    {
+      method: "POST",
+      token: viewer.token,
+      expectedStatus: 422,
+      body: {
+        bodyText: `This is explicit porn and nudity content ${RUN_ID}`,
+      },
+    },
+  );
+  assert(
+    /blocked|policy|moderation/i.test(blockedComment.error ?? ""),
+    `Expected moderation error for explicit comment, got: ${blockedComment.error}`,
+  );
+
+  await apiRequest<{ success: boolean }>(`/api/posts/${createdPost.id}/likes`, {
+    method: "POST",
+    token: viewer.token,
+  });
+
+  await apiRequest<{ success: boolean }>(`/api/subscriptions/${createdAgent.agent.id}`, {
+    method: "POST",
+    token: viewer.token,
+  });
+
+  await apiRequest<{ ok: boolean }>("/api/email-signups", {
+    method: "POST",
+    body: {
+      email: `newsletter.${RUN_ID}@zerofans.local`,
+      source: "contract-suite",
+    },
+  });
 
   const discoverCommunities = await apiRequest<DiscoverCommunitiesResponse>(
     `/api/communities/discover?q=${encodeURIComponent(RUN_ID.slice(-8))}&limit=25`,
@@ -410,6 +523,52 @@ async function main(): Promise<void> {
     },
   );
   assert(aiPost.post.bodyText.length > 0, "AI update-content returned empty bodyText");
+
+  const blockedAiPrompt = await apiRequest<{ error: string }>(
+    `/api/ai/agents/${createdAgent.agent.id}/update-content`,
+    {
+      method: "POST",
+      token: owner.token,
+      expectedStatus: 422,
+      body: {
+        prompt: `Generate porn and nude explicit content ${RUN_ID}`,
+        visibility: "public",
+        mediaType: "none",
+        mediaUrl: null,
+      },
+    },
+  );
+  assert(
+    /blocked|policy|moderation/i.test(blockedAiPrompt.error ?? ""),
+    `Expected moderation error for explicit AI prompt, got: ${blockedAiPrompt.error}`,
+  );
+
+  const usageStatsAfter = await apiRequest<UsageStatsResponse>("/api/stats/usage");
+
+  assert(
+    usageStatsAfter.users >= usageStatsBefore.users + 2,
+    `Usage stats users should increase by at least 2 (before=${usageStatsBefore.users}, after=${usageStatsAfter.users})`,
+  );
+  assert(
+    usageStatsAfter.agents >= usageStatsBefore.agents + 1,
+    `Usage stats agents should increase by at least 1 (before=${usageStatsBefore.agents}, after=${usageStatsAfter.agents})`,
+  );
+  assert(
+    usageStatsAfter.posts >= usageStatsBefore.posts + 2,
+    `Usage stats posts should increase by at least 2 (before=${usageStatsBefore.posts}, after=${usageStatsAfter.posts})`,
+  );
+  assert(
+    usageStatsAfter.likes >= usageStatsBefore.likes + 1,
+    `Usage stats likes should increase by at least 1 (before=${usageStatsBefore.likes}, after=${usageStatsAfter.likes})`,
+  );
+  assert(
+    usageStatsAfter.subscribers >= usageStatsBefore.subscribers + 1,
+    `Usage stats subscribers should increase by at least 1 (before=${usageStatsBefore.subscribers}, after=${usageStatsAfter.subscribers})`,
+  );
+  assert(
+    usageStatsAfter.newsletterSubscribers >= usageStatsBefore.newsletterSubscribers + 1,
+    `Usage stats newsletterSubscribers should increase by at least 1 (before=${usageStatsBefore.newsletterSubscribers}, after=${usageStatsAfter.newsletterSubscribers})`,
+  );
 
   const dynamicSitemapAlias = await apiRequestText("/api/seo/sitemap.xml");
   assert(
@@ -490,6 +649,14 @@ async function main(): Promise<void> {
           "GET /api/agents/discover",
           "GET /api/communities/discover",
           "GET /api/communities/:path",
+          "POST /api/posts",
+          "GET /api/posts/:postId",
+          "PATCH /api/posts/:postId",
+          "POST /api/posts/:postId/likes",
+          "POST /api/posts/:postId/comments",
+          "POST /api/subscriptions/:agentId",
+          "POST /api/email-signups",
+          "GET /api/stats/usage",
           "GET /api/seo/sitemap.xml",
           "GET /api/seo/sitemap-index.xml",
           "GET /api/seo/sitemaps/core.xml",

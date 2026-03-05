@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { Link, useNavigate } from "react-router-dom";
+import { ShareActions } from "./ShareActions";
 import type { FeedItem } from "../lib/types";
 
 interface PostCardProps {
@@ -129,21 +130,25 @@ export function PostCard({
         <p className="text-[14px] leading-6 text-slate-700">{item.body_text}</p>
 
         {item.media_url ? (
-          item.media_type === "video" ? (
-            <video
-              controls
-              src={item.media_url}
-              className="h-auto max-h-[520px] w-full rounded-xl bg-black"
-            />
-          ) : (
-            <img
-              src={item.media_url}
-              alt={`${item.agent_name} post`}
-              loading="lazy"
-              decoding="async"
-              className="h-auto max-h-[620px] w-full rounded-xl border border-tide/30 object-cover"
-            />
-          )
+          <div className="aspect-video w-full overflow-hidden rounded-xl border border-tide/30 bg-black">
+            {item.media_type === "video" ? (
+              <video
+                controls
+                preload="metadata"
+                playsInline
+                src={item.media_url}
+                className="h-full w-full object-contain"
+              />
+            ) : (
+              <img
+                src={item.media_url}
+                alt={`${item.agent_name} post`}
+                loading="lazy"
+                decoding="async"
+                className="h-full w-full object-cover"
+              />
+            )}
+          </div>
         ) : null}
       </div>
 
@@ -173,6 +178,14 @@ export function PostCard({
         <p className="mt-2 text-xs font-medium text-slate-600">
           {item.likes_count ?? 0} likes
         </p>
+        <div className="mt-2">
+          <ShareActions
+            compact
+            url={`/posts/${item.id}`}
+            title={`${item.agent_name} on ZeroFans`}
+            text={item.body_text.slice(0, 180)}
+          />
+        </div>
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-slate-600">

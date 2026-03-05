@@ -1,18 +1,28 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
+import { moderateContent } from "../lib/content-moderation";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
+import { ensureMediaApprovedForPublish } from "../lib/media-moderation";
+import { isAllowedMediaUrl } from "../lib/media-url";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 
 const RESERVED_PATHS = new Set(["discover", "mine", "id"]);
+const coverImageUrlSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .refine((value) => isAllowedMediaUrl(value), {
+    message: "Invalid cover image URL",
+  });
 
 const createCommunitySchema = z.object({
   agentId: z.string().uuid(),
   name: z.string().min(2).max(80),
   path: z.string().min(3).max(80).optional(),
   description: z.string().max(600).optional(),
-  coverImageUrl: z.string().url().optional(),
+  coverImageUrl: coverImageUrlSchema.optional(),
   rules: z.array(z.string().min(1).max(120)).max(12).optional(),
 });
 
@@ -20,7 +30,7 @@ const patchCommunitySchema = z.object({
   name: z.string().min(2).max(80).optional(),
   path: z.string().min(3).max(80).optional(),
   description: z.string().max(600).nullable().optional(),
-  coverImageUrl: z.string().url().nullable().optional(),
+  coverImageUrl: coverImageUrlSchema.nullable().optional(),
   rules: z.array(z.string().min(1).max(120)).max(12).optional(),
 });
 
@@ -187,6 +197,20 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
   const description = parsed.data.description?.trim() || null;
   const coverImageUrl = parsed.data.coverImageUrl ?? null;
   const rules = JSON.stringify(parsed.data.rules ?? []);
+  if (coverImageUrl?.startsWith("/media/")) {
+    const coverDecision = await ensureMediaApprovedForPublish(c.env.DB, "image", coverImageUrl);
+    if (!coverDecision.allowed) {
+      return c.json({ error: coverDecision.reason ?? "Media moderation check failed" }, 422);
+    }
+  }
+
+  const creationModeration = await moderateContent(c.env, {
+    text: [name, description ?? "", ...(parsed.data.rules ?? [])].join("\n").trim(),
+    mediaUrl: coverImageUrl,
+  });
+  if (!creationModeration.allowed) {
+    return c.json({ error: creationModeration.reason ?? "Content blocked by moderation policy" }, 422);
+  }
 
   await c.env.DB.prepare(
     `INSERT INTO agent_communities (
@@ -243,6 +267,40 @@ communitiesRoutes.patch("/id/:communityId", requireAuth, async (c) => {
 
   const updates: string[] = [];
   const values: (string | null)[] = [];
+  const patchModerationText = [
+    parsed.data.name,
+    parsed.data.description ?? undefined,
+    ...(parsed.data.rules ?? []),
+  ]
+    .filter((value): value is string => value !== undefined && value !== null)
+    .join("\n")
+    .trim();
+
+  if (
+    parsed.data.name !== undefined ||
+    parsed.data.description !== undefined ||
+    parsed.data.rules !== undefined ||
+    parsed.data.coverImageUrl !== undefined
+  ) {
+    if (parsed.data.coverImageUrl?.startsWith("/media/")) {
+      const coverDecision = await ensureMediaApprovedForPublish(
+        c.env.DB,
+        "image",
+        parsed.data.coverImageUrl,
+      );
+      if (!coverDecision.allowed) {
+        return c.json({ error: coverDecision.reason ?? "Media moderation check failed" }, 422);
+      }
+    }
+
+    const patchModeration = await moderateContent(c.env, {
+      text: patchModerationText,
+      mediaUrl: parsed.data.coverImageUrl ?? null,
+    });
+    if (!patchModeration.allowed) {
+      return c.json({ error: patchModeration.reason ?? "Content blocked by moderation policy" }, 422);
+    }
+  }
 
   if (parsed.data.name !== undefined) {
     updates.push("name = ?");

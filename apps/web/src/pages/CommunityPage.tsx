@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { apiRequest } from "../lib/api";
-import { mockAgentAccounts } from "../lib/mock-agents";
 
 interface DiscoverCommunity {
   id: string;
@@ -21,11 +20,6 @@ interface DiscoverCommunity {
     avatarUrl: string | null;
     personalityTags: string[];
   };
-}
-
-interface CommunityCard extends DiscoverCommunity {
-  source: "api" | "mock";
-  featuredPostText: string | null;
 }
 
 interface DiscoveryTrack {
@@ -88,7 +82,7 @@ function initials(value: string): string {
     .toUpperCase();
 }
 
-function buildHaystack(community: CommunityCard): string {
+function buildHaystack(community: DiscoverCommunity): string {
   return [
     community.name,
     community.path,
@@ -97,13 +91,15 @@ function buildHaystack(community: CommunityCard): string {
     community.agent.slug,
     ...community.agent.personalityTags,
     ...community.rules,
-    community.featuredPostText ?? "",
   ]
     .join(" ")
     .toLowerCase();
 }
 
-function scoreForStudioDiscover(community: CommunityCard, activeTrack: DiscoveryTrack): number {
+function scoreForStudioDiscover(
+  community: DiscoverCommunity,
+  activeTrack: DiscoveryTrack,
+): number {
   const haystack = buildHaystack(community);
   const keywords =
     activeTrack.id === "all" ? GLOBAL_STUDIO_KEYWORDS : activeTrack.keywords;
@@ -125,43 +121,7 @@ export function CommunityPage() {
       apiRequest<{ items: DiscoverCommunity[] }>("/api/communities/discover?limit=24"),
   });
 
-  const fallbackCommunities = useMemo<CommunityCard[]>(
-    () =>
-      mockAgentAccounts.map((agent) => ({
-        id: `mock-community-${agent.id}`,
-        agentId: agent.id,
-        name: `${agent.name} Community`,
-        path: `${agent.slug}-club`,
-        description: agent.bio,
-        coverImageUrl: null,
-        rules: ["No spam", "Be kind", "Keep it creative"],
-        postsCount: agent.postsCount,
-        agentFollowersCount: agent.agentFollowersCount,
-        agent: {
-          name: agent.name,
-          slug: agent.slug,
-          avatarUrl: null,
-          personalityTags: agent.personalityTags,
-        },
-        source: "mock" as const,
-        featuredPostText: agent.featuredPost.text,
-      })),
-    [],
-  );
-
-  const apiItems = discoverQuery.data?.items;
-
-  const communities = useMemo<CommunityCard[]>(() => {
-    if (apiItems && apiItems.length > 0) {
-      return apiItems.map((item) => ({
-        ...item,
-        source: "api" as const,
-        featuredPostText: null,
-      }));
-    }
-
-    return fallbackCommunities;
-  }, [apiItems, fallbackCommunities]);
+  const communities = discoverQuery.data?.items ?? [];
 
   const activeTrack = useMemo<DiscoveryTrack>(
     () =>
@@ -228,9 +188,7 @@ export function CommunityPage() {
             {communities.length} communities indexed
           </span>
           <span className="rounded-full border border-tide/30 bg-white px-3 py-1">
-            {discoverQuery.data?.items?.length
-              ? "Live community data"
-              : "Fallback community data"}
+            Live community data
           </span>
           <span className="rounded-full border border-tide/30 bg-white px-3 py-1">
             Track: {activeTrack.label}
@@ -278,11 +236,13 @@ export function CommunityPage() {
 
           {discoverQuery.isError ? (
             <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-sm text-red-200">
-              Failed to load live community data. Showing fallback cards.
+              Failed to load live community data.
             </div>
           ) : null}
 
-          {!discoverQuery.isLoading && filteredCommunities.length === 0 ? (
+          {!discoverQuery.isLoading &&
+          !discoverQuery.isError &&
+          filteredCommunities.length === 0 ? (
             <div className="rounded-2xl border border-tide/25 bg-peach/90 p-6 text-center text-sm text-slate-600">
               No communities matched this track yet. Try another lens or clear search.
             </div>
@@ -315,11 +275,6 @@ export function CommunityPage() {
                   <p className="mt-3 line-clamp-2 text-xs text-slate-600">
                     {community.description || "No description yet."}
                   </p>
-                  {community.featuredPostText ? (
-                    <p className="mt-2 line-clamp-2 text-xs font-medium text-slate-700">
-                      {community.featuredPostText}
-                    </p>
-                  ) : null}
 
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {community.agent.personalityTags.slice(0, 4).map((tag) => (
@@ -336,8 +291,6 @@ export function CommunityPage() {
                     <span>{community.postsCount} posts</span>
                     <span>•</span>
                     <span>{community.agentFollowersCount.toLocaleString()} followers</span>
-                    <span>•</span>
-                    <span>{community.source === "api" ? "Live" : "Mock"} source</span>
                   </div>
 
                   <div className="mt-3 flex gap-2">

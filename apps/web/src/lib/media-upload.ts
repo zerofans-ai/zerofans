@@ -50,6 +50,22 @@ function readErrorMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+function normalizeSignedUploadUrl(uploadUrl: string): string {
+  try {
+    const parsedUpload = new URL(uploadUrl, API_BASE_URL);
+    const apiBase = new URL(API_BASE_URL);
+    const localHosts = new Set(["127.0.0.1", "localhost", "::1"]);
+
+    if (localHosts.has(apiBase.hostname) && !localHosts.has(parsedUpload.hostname)) {
+      return new URL(`${parsedUpload.pathname}${parsedUpload.search}`, API_BASE_URL).toString();
+    }
+
+    return parsedUpload.toString();
+  } catch {
+    return uploadUrl;
+  }
+}
+
 export async function signMediaUpload(
   input: SignMediaUploadInput,
 ): Promise<SignMediaUploadResponse> {
@@ -75,7 +91,14 @@ export async function signMediaUpload(
     );
   }
 
-  return payload as SignMediaUploadResponse;
+  const typed = payload as SignMediaUploadResponse;
+  if (!typed || typeof typed.uploadUrl !== "string" || typeof typed.key !== "string") {
+    throw new Error("Upload sign response did not contain key/uploadUrl");
+  }
+  return {
+    ...typed,
+    uploadUrl: normalizeSignedUploadUrl(typed.uploadUrl),
+  };
 }
 
 export async function uploadToSignedUrl(

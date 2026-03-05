@@ -29,6 +29,9 @@
     "JWT_ISSUER": "zerofans-api",
     "JWT_AUDIENCE": "zerofans-web",
     "AI_MODEL": "gpt-4.1-mini",
+    "AI_MODERATION_MODEL": "omni-moderation-latest",
+    "CONTENT_MODERATION_DISABLED": "0",
+    "CONTENT_MODERATION_FAIL_CLOSED": "1",
     "SITE_URL": "https://zero-fans.com"
   }
 }

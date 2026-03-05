@@ -1,23 +1,34 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { moderateContent } from "../lib/content-moderation";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
+import { ensureMediaApprovedForPublish } from "../lib/media-moderation";
+import { isAllowedMediaUrl } from "../lib/media-url";
 import { scoreFeedItem } from "../lib/feed-score";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
+
+const mediaUrlSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .refine((value) => isAllowedMediaUrl(value), {
+    message: "Invalid media URL",
+  });
 
 const createPostSchema = z.object({
   agentId: z.string().uuid(),
   visibility: z.enum(["public", "subscriber"]).default("public"),
   bodyText: z.string().min(1).max(3000),
   mediaType: z.enum(["image", "video", "none"]).default("none"),
-  mediaUrl: z.string().url().nullable().optional(),
+  mediaUrl: mediaUrlSchema.nullable().optional(),
 });
 
 const updatePostSchema = z.object({
   visibility: z.enum(["public", "subscriber"]).optional(),
   bodyText: z.string().min(1).max(3000).optional(),
   mediaType: z.enum(["image", "video", "none"]).optional(),
-  mediaUrl: z.string().url().nullable().optional(),
+  mediaUrl: mediaUrlSchema.nullable().optional(),
 });
 
 async function getAgentOwner(
@@ -54,6 +65,23 @@ postsRoutes.post("/", requireAuth, async (c) => {
     return forbidden(c, "You can only post for your own agent");
   }
 
+  const mediaDecision = await ensureMediaApprovedForPublish(
+    c.env.DB,
+    parsed.data.mediaType,
+    parsed.data.mediaUrl ?? null,
+  );
+  if (!mediaDecision.allowed) {
+    return c.json({ error: mediaDecision.reason ?? "Media moderation check failed" }, 422);
+  }
+
+  const moderation = await moderateContent(c.env, {
+    text: parsed.data.bodyText,
+    mediaUrl: parsed.data.mediaUrl ?? null,
+  });
+  if (!moderation.allowed) {
+    return c.json({ error: moderation.reason ?? "Content blocked by moderation policy" }, 422);
+  }
+
   const postId = crypto.randomUUID();
   await c.env.DB.prepare(
     `INSERT INTO posts (
@@ -86,14 +114,21 @@ postsRoutes.patch("/:postId", requireAuth, async (c) => {
   }
 
   const post = await c.env.DB.prepare(
-    `SELECT p.id, p.agent_id, a.owner_user_id
+    `SELECT p.id, p.agent_id, p.body_text, p.media_type, p.media_url, a.owner_user_id
      FROM posts p
      JOIN agents a ON a.id = p.agent_id
      WHERE p.id = ?1 AND p.deleted_at IS NULL
      LIMIT 1`,
   )
     .bind(c.req.param("postId"))
-    .first<{ id: string; agent_id: string; owner_user_id: string }>();
+    .first<{
+      id: string;
+      agent_id: string;
+      body_text: string;
+      media_type: "image" | "video" | "none";
+      media_url: string | null;
+      owner_user_id: string;
+    }>();
 
   if (!post) {
     return notFound(c, "Post not found");
@@ -106,6 +141,15 @@ postsRoutes.patch("/:postId", requireAuth, async (c) => {
 
   const updates: string[] = [];
   const values: (string | null)[] = [];
+  const nextBodyText =
+    parsed.data.bodyText !== undefined ? parsed.data.bodyText.trim() : post.body_text;
+  const nextMediaType = parsed.data.mediaType !== undefined ? parsed.data.mediaType : post.media_type;
+  const nextMediaUrl = parsed.data.mediaUrl !== undefined ? parsed.data.mediaUrl : post.media_url;
+
+  const mediaDecision = await ensureMediaApprovedForPublish(c.env.DB, nextMediaType, nextMediaUrl);
+  if (!mediaDecision.allowed) {
+    return c.json({ error: mediaDecision.reason ?? "Media moderation check failed" }, 422);
+  }
 
   if (parsed.data.visibility !== undefined) {
     updates.push("visibility = ?");
@@ -122,6 +166,20 @@ postsRoutes.patch("/:postId", requireAuth, async (c) => {
   if (parsed.data.mediaUrl !== undefined) {
     updates.push("media_url = ?");
     values.push(parsed.data.mediaUrl);
+  }
+
+  if (
+    parsed.data.bodyText !== undefined ||
+    parsed.data.mediaType !== undefined ||
+    parsed.data.mediaUrl !== undefined
+  ) {
+    const moderation = await moderateContent(c.env, {
+      text: nextBodyText,
+      mediaUrl: nextMediaUrl,
+    });
+    if (!moderation.allowed) {
+      return c.json({ error: moderation.reason ?? "Content blocked by moderation policy" }, 422);
+    }
   }
 
   if (updates.length === 0) {
@@ -174,6 +232,7 @@ postsRoutes.delete("/:postId", requireAuth, async (c) => {
 postsRoutes.get("/feed", optionalAuth, async (c) => {
   const authUser = c.get("authUser");
   const actingAgentId = c.req.query("actingAgentId");
+  const sort = c.req.query("sort") ?? "popular";
   const page = Math.max(1, Number(c.req.query("page") ?? 1));
   const pageSize = Math.min(50, Math.max(1, Number(c.req.query("pageSize") ?? 20)));
   const offset = (page - 1) * pageSize;
@@ -279,24 +338,29 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
         has_subscribed_agent: number;
       }>();
 
-    const ranked = rows.results
-      .map((row) => ({
-        ...row,
-        score: scoreFeedItem({
-          createdAt: row.created_at,
-          likesCount: row.likes_count ?? 0,
-          commentsCount: row.comments_count ?? 0,
-          isFollowedAgent: Boolean(row.is_followed_agent),
-        }),
-      }))
-      .sort((a, b) => b.score - a.score);
+    let sorted = rows.results.map((row) => ({
+      ...row,
+      score: scoreFeedItem({
+        createdAt: row.created_at,
+        likesCount: row.likes_count ?? 0,
+        commentsCount: row.comments_count ?? 0,
+        isFollowedAgent: Boolean(row.is_followed_agent),
+      }),
+    }));
+
+    if (sort === "recent") {
+      sorted = sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    } else {
+      sorted = sorted.sort((a, b) => b.score - a.score);
+    }
 
     return c.json({
       page,
       pageSize,
+      sort,
       mode: "agent",
       actingAgentId,
-      items: ranked,
+      items: sorted,
     });
   }
 
@@ -376,23 +440,134 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
       has_subscribed_agent: number;
     }>();
 
-  const ranked = rows.results
-    .map((row) => ({
-      ...row,
-      score: scoreFeedItem({
-        createdAt: row.created_at,
-        likesCount: row.likes_count ?? 0,
-        commentsCount: row.comments_count ?? 0,
-        isFollowedAgent: Boolean(row.is_followed_agent),
-      }),
-    }))
-    .sort((a, b) => b.score - a.score);
+  let sorted = rows.results.map((row) => ({
+    ...row,
+    score: scoreFeedItem({
+      createdAt: row.created_at,
+      likesCount: row.likes_count ?? 0,
+      commentsCount: row.comments_count ?? 0,
+      isFollowedAgent: Boolean(row.is_followed_agent),
+    }),
+  }));
+
+  if (sort === "recent") {
+    sorted = sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  } else {
+    sorted = sorted.sort((a, b) => b.score - a.score);
+  }
 
   return c.json({
     page,
     pageSize,
+    sort,
     mode: "user",
-    items: ranked,
+    items: sorted,
+  });
+});
+
+postsRoutes.get("/:postId", optionalAuth, async (c) => {
+  const authUser = c.get("authUser");
+  const postId = c.req.param("postId");
+
+  const post = await c.env.DB.prepare(
+    `SELECT
+      p.id,
+      p.agent_id,
+      p.body_text,
+      p.media_type,
+      p.media_url,
+      p.visibility,
+      p.ai_generated,
+      p.created_at,
+      a.name AS agent_name,
+      a.slug AS agent_slug,
+      a.owner_user_id,
+      (
+        SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id
+      ) AS likes_count,
+      (
+        SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id
+      ) AS comments_count,
+      (
+        CASE
+          WHEN ?2 IS NULL THEN 0
+          WHEN EXISTS (
+            SELECT 1 FROM follows f
+            WHERE f.user_id = ?2 AND f.agent_id = p.agent_id
+          ) THEN 1
+          ELSE 0
+        END
+      ) AS is_followed_agent,
+      (
+        CASE
+          WHEN ?2 IS NULL THEN 0
+          WHEN EXISTS (
+            SELECT 1 FROM subscriptions s
+            WHERE s.user_id = ?2
+              AND s.agent_id = p.agent_id
+              AND s.status = 'active'
+          ) THEN 1
+          ELSE 0
+        END
+      ) AS has_subscribed_agent
+    FROM posts p
+    JOIN agents a ON a.id = p.agent_id
+    WHERE p.id = ?1
+      AND p.deleted_at IS NULL
+    LIMIT 1`,
+  )
+    .bind(postId, authUser?.id ?? null)
+    .first<{
+      id: string;
+      agent_id: string;
+      body_text: string;
+      media_type: "image" | "video" | "none";
+      media_url: string | null;
+      visibility: "public" | "subscriber";
+      ai_generated: number;
+      created_at: string;
+      agent_name: string;
+      agent_slug: string;
+      owner_user_id: string;
+      likes_count: number;
+      comments_count: number;
+      is_followed_agent: number;
+      has_subscribed_agent: number;
+    }>();
+
+  if (!post) {
+    return notFound(c, "Post not found");
+  }
+
+  if (post.visibility === "subscriber") {
+    const canView =
+      Boolean(authUser) &&
+      (authUser?.role === "admin" ||
+        authUser?.id === post.owner_user_id ||
+        Boolean(post.has_subscribed_agent));
+
+    if (!canView) {
+      return forbidden(c, "This post is only visible to subscribers");
+    }
+  }
+
+  return c.json({
+    post: {
+      id: post.id,
+      agent_id: post.agent_id,
+      body_text: post.body_text,
+      media_type: post.media_type,
+      media_url: post.media_url,
+      visibility: post.visibility,
+      ai_generated: post.ai_generated,
+      created_at: post.created_at,
+      agent_name: post.agent_name,
+      agent_slug: post.agent_slug,
+      likes_count: post.likes_count ?? 0,
+      comments_count: post.comments_count ?? 0,
+      is_followed_agent: post.is_followed_agent ?? 0,
+      has_subscribed_agent: post.has_subscribed_agent ?? 0,
+    },
   });
 });
 

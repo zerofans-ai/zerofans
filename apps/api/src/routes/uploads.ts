@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { badRequest, unauthorized } from "../lib/http";
 import { issueUploadToken, verifyUploadToken } from "../lib/jwt";
+import { scanUploadedMedia, upsertMediaModerationRecord } from "../lib/media-moderation";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 
@@ -39,6 +40,16 @@ function getUploadLimitBytes(contentType: string): number | null {
   return null;
 }
 
+function getMediaType(contentType: string): "image" | "video" | null {
+  if (ALLOWED_IMAGE_CONTENT_TYPES.has(contentType)) {
+    return "image";
+  }
+  if (ALLOWED_VIDEO_CONTENT_TYPES.has(contentType)) {
+    return "video";
+  }
+  return null;
+}
+
 export const uploadsRoutes = new Hono<AppEnv>();
 
 uploadsRoutes.post("/sign", requireAuth, async (c) => {
@@ -65,6 +76,7 @@ uploadsRoutes.post("/sign", requireAuth, async (c) => {
 
   const contentType = normalizeContentType(parsed.data.contentType);
   const maxBytes = getUploadLimitBytes(contentType);
+  const mediaType = getMediaType(contentType);
   if (!contentType || !maxBytes) {
     return badRequest(
       c,
@@ -87,6 +99,8 @@ uploadsRoutes.post("/sign", requireAuth, async (c) => {
   return c.json({
     key,
     maxBytes,
+    mediaType,
+    requiresModeration: true,
     uploadUrl: `${origin}/api/uploads/put/${encodeURIComponent(key)}?token=${encodeURIComponent(token)}`,
   });
 });
@@ -104,11 +118,15 @@ uploadsRoutes.put("/put/:key", async (c) => {
   }
 
   const contentType = normalizeContentType(c.req.header("content-type") ?? "");
+  const mediaType = getMediaType(contentType);
   if (!contentType) {
     return badRequest(c, "Missing Content-Type");
   }
   if (contentType !== payload.contentType) {
     return badRequest(c, "Upload Content-Type does not match signed upload token");
+  }
+  if (!mediaType) {
+    return badRequest(c, "Unsupported media type");
   }
 
   const body = await c.req.arrayBuffer();
@@ -136,5 +154,40 @@ uploadsRoutes.put("/put/:key", async (c) => {
   });
 
   const mediaUrl = `/media/${key}`;
-  return c.json({ key, mediaUrl });
+  const moderation = await scanUploadedMedia(c.env, {
+    key,
+    mediaUrl,
+    mediaType,
+    contentType,
+    bytes: body,
+  });
+
+  await upsertMediaModerationRecord(c.env.DB, {
+    mediaKey: key,
+    mediaUrl,
+    mediaType,
+    status: moderation.status,
+    reason: moderation.reason,
+    blockedCategories: moderation.blockedCategories,
+  });
+
+  if (moderation.status === "rejected") {
+    await c.env.MEDIA_BUCKET.delete(key);
+    return c.json(
+      {
+        error: moderation.reason ?? "Media rejected by moderation policy",
+        key,
+        mediaUrl,
+        moderationStatus: moderation.status,
+      },
+      422,
+    );
+  }
+
+  return c.json({
+    key,
+    mediaUrl,
+    moderationStatus: moderation.status,
+    moderationReason: moderation.reason ?? null,
+  });
 });

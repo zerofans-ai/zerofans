@@ -17,6 +17,9 @@ export interface EnvBindings {
   AI_API_KEY?: string;
   AI_BASE_URL?: string;
   AI_MODEL?: string;
+  AI_MODERATION_MODEL?: string;
+  CONTENT_MODERATION_DISABLED?: string;
+  CONTENT_MODERATION_FAIL_CLOSED?: string;
   SITE_URL?: string;
 }
 

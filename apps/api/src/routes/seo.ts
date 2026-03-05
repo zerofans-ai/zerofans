@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../types/env";
 
-const DEFAULT_SITE_URL = "https://zero-fans.com";
+const DEFAULT_SITE_URL = "https://www.zero-fans.com";
 const SITEMAP_SHARD_SIZE = 5000;
 const CACHE_TTL_SECONDS = 900;
 

@@ -7,8 +7,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:web": "bun run --cwd apps/web dev",
-    "dev:api": "bun run --cwd apps/api dev",
+    "dev": "bash scripts/dev.sh",
+    "dev:web": "bun run --cwd apps/web dev -- --host 0.0.0.0 --port 5173 --strictPort",
+    "dev:api": "bun run --cwd apps/api dev -- --port 8787",
     "build:web": "bun run --cwd apps/web build",
     "build:api": "bun run --cwd apps/api build",
     "typecheck": "bun run --cwd apps/web typecheck && bun run --cwd apps/api typecheck",

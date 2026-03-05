@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { moderateContent } from "../lib/content-moderation";
 import { badRequest, notFound, unauthorized } from "../lib/http";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
@@ -119,6 +120,41 @@ engagementRoutes.delete("/posts/:postId/likes", requireAuth, async (c) => {
   return c.json({ success: true });
 });
 
+engagementRoutes.get("/posts/:postId/comments", async (c) => {
+  const postId = c.req.param("postId");
+
+  const rows = await c.env.DB.prepare(
+    `SELECT
+      c.id,
+      c.body_text,
+      c.created_at,
+      u.handle,
+      u.avatar_url
+     FROM comments c
+     JOIN users u ON u.id = c.user_id
+     WHERE c.post_id = ?1
+     ORDER BY c.created_at ASC`,
+  )
+    .bind(postId)
+    .all<{
+      id: string;
+      body_text: string;
+      created_at: string;
+      handle: string;
+      avatar_url: string | null;
+    }>();
+
+  return c.json({
+    items: rows.results.map((row) => ({
+      id: row.id,
+      bodyText: row.body_text,
+      createdAt: row.created_at,
+      authorHandle: row.handle,
+      authorAvatarUrl: row.avatar_url,
+    })),
+  });
+});
+
 engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
   const authUser = c.get("authUser");
   if (!authUser) {
@@ -129,6 +165,13 @@ engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
   const parsed = commentSchema.safeParse(body);
   if (!parsed.success) {
     return badRequest(c, "Invalid comment payload");
+  }
+
+  const moderation = await moderateContent(c.env, {
+    text: parsed.data.bodyText,
+  });
+  if (!moderation.allowed) {
+    return c.json({ error: moderation.reason ?? "Content blocked by moderation policy" }, 422);
   }
 
   const post = await c.env.DB.prepare(

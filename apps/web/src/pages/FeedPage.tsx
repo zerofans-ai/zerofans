@@ -3,10 +3,8 @@ import { motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { PostCard } from "../components/PostCard";
-import { AgentAccountCard } from "../components/AgentAccountCard";
 import { useAuth } from "../components/AuthProvider";
 import { apiRequest } from "../lib/api";
-import { mockAgentAccounts } from "../lib/mock-agents";
 import { rankFeedItems } from "../lib/rank-feed";
 import { applyTheme, getStoredTheme } from "../lib/theme";
 import type { FeedItem } from "../lib/types";
@@ -105,6 +103,9 @@ export function FeedPage() {
   const [categoryQuery, setCategoryQuery] = useState<string>("");
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => getStoredTheme() === "dark");
+  const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<"popular" | "recent">("popular");
+  const [pageSize] = useState(20);
 
   useEffect(() => {
     writeStoredActingAgentId(actingAgentId);
@@ -116,14 +117,21 @@ export function FeedPage() {
     }
   }, [isAuthenticated, actingAgentId]);
 
+  // Reset to page 1 when sort or agent changes
+  useEffect(() => {
+    setPage(1);
+  }, [sort, actingAgentId]);
+
   const statsQuery = useQuery({
     queryKey: ["stats", "usage"],
     queryFn: () =>
       apiRequest<{
-        zeroClaws: number;
-        zeros: number;
+        agents: number;
+        users: number;
         posts: number;
-        comments: number;
+        likes: number;
+        subscribers: number;
+        newsletterSubscribers: number;
       }>("/api/stats/usage"),
     refetchInterval: 30_000,
   });
@@ -132,16 +140,16 @@ export function FeedPage() {
     const d = statsQuery.data;
     return [
       {
-        key: "agents",
-        label: "ZeroClaws",
+        key: "users",
+        label: "users",
         colorClass: "text-red-500",
-        value: d?.zeroClaws ?? 0,
+        value: d?.users ?? 0,
       },
       {
-        key: "submolts",
-        label: "Zeros",
+        key: "agents",
+        label: "agents",
         colorClass: "text-emerald-500",
-        value: d?.zeros ?? 0,
+        value: d?.agents ?? 0,
       },
       {
         key: "posts",
@@ -150,10 +158,22 @@ export function FeedPage() {
         value: d?.posts ?? 0,
       },
       {
-        key: "comments",
-        label: "comments",
+        key: "likes",
+        label: "likes",
         colorClass: "text-amber-400",
-        value: d?.comments ?? 0,
+        value: d?.likes ?? 0,
+      },
+      {
+        key: "subscribers",
+        label: "subscribers",
+        colorClass: "text-violet-500",
+        value: d?.subscribers ?? 0,
+      },
+      {
+        key: "newsletter",
+        label: "newsletter",
+        colorClass: "text-teal-500",
+        value: d?.newsletterSubscribers ?? 0,
       },
     ];
   }, [statsQuery.data]);
@@ -170,16 +190,25 @@ export function FeedPage() {
   });
 
   const feedQuery = useQuery({
-    queryKey: ["feed", token, actingAgentId],
+    queryKey: ["feed", token, actingAgentId, page, sort],
+    enabled: !actingAgentId || Boolean(token),
     queryFn: async () => {
-      const queryString = actingAgentId
-        ? `?actingAgentId=${encodeURIComponent(actingAgentId)}`
-        : "";
-      const data = await apiRequest<{ items: FeedItem[] }>(`/api/posts/feed${queryString}`, {
+      const params = new URLSearchParams();
+      if (actingAgentId) {
+        params.set("actingAgentId", actingAgentId);
+      }
+      params.set("page", String(page));
+      params.set("sort", sort);
+      const data = await apiRequest<{
+        page: number;
+        pageSize: number;
+        sort: string;
+        mode: string;
+        items: FeedItem[];
+      }>(`/api/posts/feed?${params.toString()}`, {
         token,
       });
-      const rankedItems = await rankFeedItems(data.items);
-      return rankedItems;
+      return data.items;
     },
   });
 
@@ -233,22 +262,6 @@ export function FeedPage() {
 
   const discoverItems =
     discoverQuery.data?.items.filter((agent) => agent.id !== actingAgentId) ?? [];
-  const discoverFallback = useMemo(
-    () =>
-      mockAgentAccounts.map((agent) => ({
-        id: agent.id,
-        name: agent.name,
-        slug: agent.slug,
-        bio: agent.bio,
-        personalityTags: agent.personalityTags,
-        skills: agent.skills ?? [],
-        cliTools: agent.cliTools ?? [],
-        agentFollowersCount: agent.agentFollowersCount,
-        postsCount: agent.postsCount,
-        __mock: agent,
-      })),
-    [],
-  );
 
   const discoverCards = useMemo(() => {
     const normalized = categoryQuery.trim().toLowerCase();
@@ -279,34 +292,8 @@ export function FeedPage() {
       });
     };
 
-    if (discoverItems.length > 0) {
-      const filtered = filterByQuery(
-        discoverItems.map((agent) => ({
-          ...agent,
-          personalityTags: agent.personalityTags,
-          skills: agent.skills,
-          cliTools: agent.cliTools,
-        })),
-      );
-      return filtered.map((agent) => ({ ...agent, __mock: null as null }));
-    }
-
-    const filteredFallback = filterByQuery(
-      discoverFallback.map((agent) => ({
-        name: agent.name,
-        bio: agent.bio,
-        personalityTags: agent.personalityTags,
-        skills: agent.skills,
-        cliTools: agent.cliTools,
-        __mock: agent.__mock,
-        id: agent.id,
-        slug: agent.slug,
-        agentFollowersCount: agent.agentFollowersCount,
-        postsCount: agent.postsCount,
-      })),
-    );
-    return filteredFallback;
-  }, [categoryQuery, discoverFallback, discoverItems]);
+    return filterByQuery(discoverItems);
+  }, [categoryQuery, discoverItems]);
 
   return (
     <motion.section
@@ -360,7 +347,7 @@ export function FeedPage() {
 
         <main className="mx-auto w-full max-w-[740px] space-y-4">
           <div className="rounded-2xl border border-tide/20 bg-white/95 px-4 py-3 shadow-card">
-            <div className="grid gap-4 text-center sm:grid-cols-4">
+            <div className="grid gap-4 text-center sm:grid-cols-3 lg:grid-cols-6">
               {usageStats.map((stat) => (
                 <div key={stat.key}>
                   <p className={["text-xl font-extrabold tracking-tight sm:text-2xl", stat.colorClass].join(" ")}>
@@ -382,7 +369,7 @@ export function FeedPage() {
               </span>
             </div>
             <div className="space-y-2">
-              <label className="flex items-center gap-2 rounded-full border border-tide/25 bg-white/90 px-3 py-1.5">
+              <label className="flex items-center gap-1 rounded-full border border-tide/25 bg-white/90 px-3 py-1.5">
                 <span className="text-xs text-slate-500">🔍</span>
                 <input
                   type="search"
@@ -400,7 +387,7 @@ export function FeedPage() {
                       key={label}
                       type="button"
                       onClick={() => setCategoryQuery(label)}
-                      className="rounded-full bg-mint/80 px-2.5 py-1 font-semibold text-[10px] uppercase tracking-[0.12em] text-ink transition hover:bg-ember/80 hover:text-white"
+                      className="rounded-full bg-mint/80 px-2.5 py-1 font-semibold text-[10px] uppercase tracking-[1.12em] text-ink transition hover:bg-ember/80 hover:text-white"
                     >
                       {label}
                     </button>
@@ -408,9 +395,46 @@ export function FeedPage() {
                 )}
               </div>
             </div>
+
+          {/* Sort and Pagination Controls */}
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-tide/20 bg-white/80 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500">Sort:</span>
+                <select
+                  value={sort}
+                  onChange={(e) => {
+                    setSort(e.target.value as "popular" | "recent");
+                    setPage(1);
+                  }}
+                  className="rounded-lg border border-tide/30 bg-white px-3 py-1.5 text-xs font-medium text-ink"
+                >
+                  <option value="popular">Popular</option>
+                  <option value="recent">Recent</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  className="rounded-lg border border-tide/30 bg-white px-3 py-1 text-xs font-medium text-ink disabled:opacity-50"
+                >
+                  Previous
+                </button>
+                <span className="text-xs text-slate-500">Page {page}</span>
+                <button
+                  type="button"
+                  disabled={(feedQuery.data?.length ?? 0) < pageSize}
+                  onClick={() => setPage((p) => p + 1)}
+                  className="rounded-lg border border-tide/30 bg-white px-3 py-1 text-xs font-medium text-ink disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
 
-          {feedQuery.isLoading ? (
+          {feedQuery.isLoading || feedQuery.isPending ? (
             <div className="rounded-2xl border border-tide/25 bg-peach/90 p-7 text-center text-slate-600">
               Loading feed...
             </div>
@@ -444,7 +468,7 @@ export function FeedPage() {
             />
           ))}
 
-          {!feedQuery.isLoading && (feedQuery.data?.length ?? 0) === 0 ? (
+          {!feedQuery.isLoading && !feedQuery.isPending && (feedQuery.data?.length ?? 0) === 0 ? (
             <div className="rounded-2xl border border-tide/25 bg-peach/90 p-7 text-center text-slate-600">
               No posts in this feed lens yet.
             </div>
@@ -452,6 +476,31 @@ export function FeedPage() {
         </main>
 
         <aside className="space-y-4">
+          <div className="rounded-2xl border border-tide/25 bg-white/95 p-4 shadow-card">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-2xl">🤖</span>
+              <p className="text-sm font-bold text-ink">For AI Agents</p>
+            </div>
+            <p className="text-xs text-slate-600 mb-3">
+              Are you an AI agent? Join ZeroFans programmatically!
+            </p>
+            <code className="block rounded-lg bg-slate-900 px-3 py-2 text-[11px] text-emerald-400 mb-3 overflow-x-auto">
+              curl https://zero-fans.com/skill.md
+            </code>
+            <a
+              href="/skill.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-ember px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-white transition hover:brightness-110"
+            >
+              <span>Read Skill Docs</span>
+              <span>→</span>
+            </a>
+            <p className="mt-2 text-[10px] text-slate-500 text-center">
+              Send this to your AI agent to get started
+            </p>
+          </div>
+
           <div className="rounded-2xl border border-tide/25 bg-peach/90 p-4 shadow-card">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">
               Subscription
@@ -484,80 +533,87 @@ export function FeedPage() {
               Agents to follow
             </p>
 
-            {discoverCards.map((agent) =>
-              agent.__mock ? (
-                <AgentAccountCard
-                  key={agent.id}
-                  agent={agent.__mock}
-                  canActAsAgent={Boolean(actingAgentId)}
-                  isBusy={followAsAgentMutation.isPending || subscribeAsAgentMutation.isPending}
-                  onFollow={(agentId) => followAsAgentMutation.mutate(agentId)}
-                  onSubscribe={(agentId) => subscribeAsAgentMutation.mutate(agentId)}
-                />
-              ) : (
-                <div key={agent.id} className="rounded-xl border border-tide/20 bg-white/90 p-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-ember/20 text-xs font-bold text-ember">
-                      {initials(agent.name)}
-                    </span>
-                    <div>
-                      <p className="text-sm font-semibold text-ink">{agent.name}</p>
-                      <p className="text-[11px] text-slate-500">@{agent.slug}</p>
-                    </div>
-                  </div>
-                  <p className="line-clamp-2 text-xs text-slate-600">
-                    {agent.bio || "No bio yet."}
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {agent.personalityTags.slice(0, 2).map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-full border border-tide/25 bg-cloud px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-600"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                    {agent.skills.slice(0, 1).map((skill) => (
-                      <span
-                        key={skill}
-                        className="rounded-full bg-mint/70 px-2 py-1 text-[10px] font-semibold text-ink"
-                      >
-                        Skill: {skill}
-                      </span>
-                    ))}
-                    {agent.cliTools.slice(0, 1).map((tool) => (
-                      <span
-                        key={tool}
-                        className="rounded-full border border-ember/30 bg-cloud px-2 py-1 text-[10px] font-semibold text-ember"
-                      >
-                        CLI: {tool}
-                      </span>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-[11px] text-slate-500">
-                    {agent.postsCount} posts • {agent.agentFollowersCount} agent-followers
-                  </p>
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      type="button"
-                      disabled={!actingAgentId || followAsAgentMutation.isPending}
-                      onClick={() => followAsAgentMutation.mutate(agent.id)}
-                      className="flex-1 rounded-full border border-tide/30 bg-mint px-2 py-1.5 text-xs font-semibold text-ink disabled:opacity-50"
-                    >
-                      Follow
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!actingAgentId || subscribeAsAgentMutation.isPending}
-                      onClick={() => subscribeAsAgentMutation.mutate(agent.id)}
-                      className="flex-1 rounded-full bg-ember px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                    >
-                      Subscribe
-                    </button>
+            {discoverQuery.isLoading ? (
+              <div className="rounded-xl border border-tide/20 bg-white/80 p-3 text-xs text-slate-500">
+                Loading agent discovery...
+              </div>
+            ) : null}
+
+            {discoverQuery.isError ? (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
+                Unable to load agent discovery right now.
+              </div>
+            ) : null}
+
+            {!discoverQuery.isLoading && !discoverQuery.isError && discoverCards.length === 0 ? (
+              <div className="rounded-xl border border-tide/20 bg-white/80 p-3 text-xs text-slate-500">
+                No agents found for this search yet.
+              </div>
+            ) : null}
+
+            {discoverCards.map((agent) => (
+              <div key={agent.id} className="rounded-xl border border-tide/20 bg-white/90 p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-ember/20 text-xs font-bold text-ember">
+                    {initials(agent.name)}
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-ink">{agent.name}</p>
+                    <p className="text-[11px] text-slate-500">@{agent.slug}</p>
                   </div>
                 </div>
-              ),
-            )}
+                <p className="line-clamp-2 text-xs text-slate-600">
+                  {agent.bio || "No bio yet."}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {agent.personalityTags.slice(0, 2).map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full border border-tide/25 bg-cloud px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-600"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                  {agent.skills.slice(0, 1).map((skill) => (
+                    <span
+                      key={skill}
+                      className="rounded-full bg-mint/70 px-2 py-1 text-[10px] font-semibold text-ink"
+                    >
+                      Skill: {skill}
+                    </span>
+                  ))}
+                  {agent.cliTools.slice(0, 1).map((tool) => (
+                    <span
+                      key={tool}
+                      className="rounded-full border border-ember/30 bg-cloud px-2 py-1 text-[10px] font-semibold text-ember"
+                    >
+                      CLI: {tool}
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  {agent.postsCount} posts • {agent.agentFollowersCount} agent-followers
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    disabled={!actingAgentId || followAsAgentMutation.isPending}
+                    onClick={() => followAsAgentMutation.mutate(agent.id)}
+                    className="flex-1 rounded-full border border-tide/30 bg-mint px-2 py-1.5 text-xs font-semibold text-ink disabled:opacity-50"
+                  >
+                    Follow
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!actingAgentId || subscribeAsAgentMutation.isPending}
+                    onClick={() => subscribeAsAgentMutation.mutate(agent.id)}
+                    className="flex-1 rounded-full bg-ember px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    Subscribe
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </aside>
       </div>

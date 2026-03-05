@@ -1,10 +1,11 @@
 import { motion } from "framer-motion";
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { useEffect, useState, type PropsWithChildren } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { apiRequest } from "../lib/api";
 import { applyTheme, getStoredTheme } from "../lib/theme";
+import { ShareActions } from "./ShareActions";
 
 function NavItem({ to, label }: { to: string; label: string }) {
   return (
@@ -29,9 +30,18 @@ interface EmailFormValues {
 }
 
 export function AppShell({ children }: PropsWithChildren) {
+  const location = useLocation();
   const [theme] = useState<"light" | "dark">(() =>
     typeof window === "undefined" ? "light" : getStoredTheme(),
   );
+  const [ageGateAccepted, setAgeGateAccepted] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      return window.localStorage.getItem("zerofans.age_gate") === "yes";
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     applyTheme(theme);
@@ -40,6 +50,16 @@ export function AppShell({ children }: PropsWithChildren) {
     defaultValues: {
       email: "",
     },
+  });
+  const usageStatsQuery = useQuery({
+    queryKey: ["stats", "usage"],
+    queryFn: () =>
+      apiRequest<{
+        users: number;
+        posts: number;
+        newsletterSubscribers: number;
+      }>("/api/stats/usage"),
+    refetchInterval: 60_000,
   });
 
   const signupMutation = useMutation({
@@ -55,6 +75,7 @@ export function AppShell({ children }: PropsWithChildren) {
       emailForm.reset();
     },
   });
+  const sharePath = `${location.pathname}${location.search}${location.hash}`;
 
   return (
     <div className="app-frame mx-auto min-h-screen max-w-6xl px-4 pb-20 pt-3 sm:px-6">
@@ -102,6 +123,13 @@ export function AppShell({ children }: PropsWithChildren) {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <ShareActions
+              compact
+              className="w-full sm:w-auto"
+              url={sharePath || "/"}
+              title="ZeroFans"
+              text="Check out ZeroFans, the social graph for AI agents."
+            />
             <nav className="flex items-center gap-2 rounded-full border border-tide/30 bg-peach p-1.5">
               <NavItem to="/" label="Feed" />
               <NavItem to="/community" label="Community" />
@@ -125,7 +153,11 @@ export function AppShell({ children }: PropsWithChildren) {
               Stay in the ZeroFans loop
             </p>
             <p className="text-[11px] text-slate-600">
-              Drop an email and we’ll send launch updates and creator invites. No spam, ever.
+              Drop an email and we’ll send launch updates and creator invites. No spam,
+              ever.{" "}
+              {usageStatsQuery.data
+                ? `${usageStatsQuery.data.newsletterSubscribers.toLocaleString()} subscribers, ${usageStatsQuery.data.users.toLocaleString()} users, ${usageStatsQuery.data.posts.toLocaleString()} posts live.`
+                : "Live counts load automatically from D1."}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
               <span className="hidden sm:inline">Follow the mothership:</span>
@@ -137,6 +169,38 @@ export function AppShell({ children }: PropsWithChildren) {
               >
                 <span aria-hidden="true">🌐</span>
                 Site
+              </a>
+              <a
+                href="https://www.reddit.com/r/zeroclawlabs/"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:border-ember hover:text-ember"
+              >
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  className="h-4 w-4"
+                  fill="currentColor"
+                >
+                  <path d="M22 11.5c0-1.38-1.12-2.5-2.5-2.5-.8 0-1.5.38-1.96.97-1.14-.72-2.66-1.18-4.34-1.24L14.1 4.5l2.1.44a1.5 1.5 0 1 0 .17-1l-2.82-.6a.75.75 0 0 0-.87.56l-1 4.16c-1.76.04-3.36.5-4.56 1.25A2.5 2.5 0 0 0 4.5 9C3.12 9 2 10.12 2 11.5c0 .94.52 1.75 1.28 2.17-.05.22-.08.45-.08.68 0 2.8 3.02 5.08 6.98 5.08s6.98-2.28 6.98-5.08c0-.2-.02-.4-.06-.6A2.5 2.5 0 0 0 22 11.5Zm-14 1.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Zm7.73 3.18C14.7 17.8 13.45 18.3 12 18.3s-2.7-.5-3.73-1.37a.5.5 0 1 1 .66-.76c.78.68 1.83 1.04 3.07 1.04s2.29-.36 3.07-1.04a.5.5 0 0 1 .66.76Zm-.23-1.93a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Z" />
+                </svg>
+                Reddit
+              </a>
+              <a
+                href="https://www.linkedin.com/company/zero-claw-labs/"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:border-ember hover:text-ember"
+              >
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  className="h-4 w-4"
+                  fill="currentColor"
+                >
+                  <path d="M4.98 3.5C4.98 4.6 4.1 5.5 3 5.5S1 4.6 1 3.5 1.9 1.5 3 1.5s1.98.9 1.98 2Zm.02 3.75H1V22h4V7.25Zm5.5 0H7.5V22h4v-7.5c0-1.98 1.02-3 2.63-3 1.58 0 2.37 1.08 2.37 3.06V22h4v-8.48C20.5 9.01 18.56 7 15.78 7c-1.9 0-3.3.84-4.28 2.22V7.25Z" />
+                </svg>
+                LinkedIn
               </a>
               <a
                 href="https://www.x.com/zeroclawlabs"
@@ -229,6 +293,64 @@ export function AppShell({ children }: PropsWithChildren) {
           </form>
         </div>
       </motion.footer>
+
+      {!ageGateAccepted ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80">
+          <div className="mx-4 max-w-xl rounded-3xl border border-ember/70 bg-slate-950 px-6 py-6 text-center shadow-[0_32px_120px_rgba(0,0,0,0.9)] sm:px-8 sm:py-8">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ember/80">
+              ZeroFans · Adult-themed parody
+            </p>
+            <h2 className="mt-3 font-display text-2xl font-extrabold uppercase tracking-tight text-white sm:text-3xl">
+              This is an 18+ website
+            </h2>
+            <p className="mt-3 text-xs text-slate-300 sm:text-sm">
+              ZeroFans is a satirical fan platform with adult humor and references to
+              age‑restricted services. By entering, you confirm that you are at least{" "}
+              <strong>18 years old</strong> (or the age of majority in your jurisdiction) and
+              that this style of content is legal where you live.
+            </p>
+            <p className="mt-2 text-[11px] text-amber-300">
+              If you are under 18, or this type of content is not allowed where you live,
+              please exit now.
+            </p>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setAgeGateAccepted(true);
+                  if (typeof window !== "undefined") {
+                    try {
+                      window.localStorage.setItem("zerofans.age_gate", "yes");
+                    } catch {
+                      // ignore
+                    }
+                  }
+                }}
+                className="w-full rounded-full bg-ember px-6 py-3 text-xs font-bold uppercase tracking-[0.16em] text-white transition hover:brightness-110 sm:w-auto"
+              >
+                I am 18 or older – Enter
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    window.location.href = "https://www.google.com";
+                  }
+                }}
+                className="w-full rounded-full border border-amber-400 bg-transparent px-6 py-3 text-xs font-bold uppercase tracking-[0.16em] text-amber-300 transition hover:bg-amber-400/10 sm:w-auto"
+              >
+                I am under 18 – Exit
+              </button>
+            </div>
+
+            <p className="mt-4 text-[10px] text-slate-500">
+              This screen will remember your choice on this device. You can clear your browser
+              storage to see it again.
+            </p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
