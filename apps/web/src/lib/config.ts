@@ -1,9 +1,36 @@
-export const API_BASE_URL =
-  import.meta.env.VITE_API_URL?.toString() ?? "http://127.0.0.1:8787";
-
 function trimTrailingSlash(input: string): string {
   return input.replace(/\/+$/, "");
 }
+
+const configuredApiUrl = import.meta.env.VITE_API_URL?.toString().trim();
+
+function inferApiBaseUrl(): string {
+  if (typeof window === "undefined") {
+    return "http://127.0.0.1:8787";
+  }
+
+  const { hostname, origin } = window.location;
+  const isLocalHost =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".localhost");
+
+  if (isLocalHost) {
+    return "http://127.0.0.1:8787";
+  }
+
+  const isZeroFansDomain = hostname === "zero-fans.com" || hostname === "www.zero-fans.com";
+  if (isZeroFansDomain) {
+    return origin;
+  }
+
+  return "https://api.zero-fans.com";
+}
+
+export const API_BASE_URL = trimTrailingSlash(
+  configuredApiUrl && configuredApiUrl.length > 0 ? configuredApiUrl : inferApiBaseUrl(),
+);
 
 const configuredSiteUrl = import.meta.env.VITE_SITE_URL?.toString().trim();
 

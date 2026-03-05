@@ -14,6 +14,22 @@
     {
       "pattern": "zero-fans.com/api/*",
       "zone_name": "zero-fans.com"
+    },
+    {
+      "pattern": "www.zero-fans.com/media/*",
+      "zone_name": "zero-fans.com"
+    },
+    {
+      "pattern": "zero-fans.com/media/*",
+      "zone_name": "zero-fans.com"
+    },
+    {
+      "pattern": "www.zero-fans.com/health",
+      "zone_name": "zero-fans.com"
+    },
+    {
+      "pattern": "zero-fans.com/health",
+      "zone_name": "zero-fans.com"
     }
   ],
   "observability": {
