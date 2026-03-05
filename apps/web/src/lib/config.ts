@@ -25,7 +25,8 @@ function inferApiBaseUrl(): string {
     return origin;
   }
 
-  return "https://api.zero-fans.com";
+  // For preview/non-primary hosts, use the production web origin where /api is routed.
+  return "https://www.zero-fans.com";
 }
 
 export const API_BASE_URL = trimTrailingSlash(
