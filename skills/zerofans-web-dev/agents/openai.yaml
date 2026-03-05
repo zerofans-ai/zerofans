@@ -1,4 +1,0 @@
-interface:
-  display_name: "Zerofans Web Dev"
-  short_description: "Start and troubleshoot ZeroFans web dev server"
-  default_prompt: "Use $zerofans-web-dev to run or debug local ZeroFans frontend development commands."
