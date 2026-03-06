@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { moderateContent } from "../lib/content-moderation";
 import { badRequest, notFound, unauthorized } from "../lib/http";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
@@ -165,13 +164,6 @@ engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
   const parsed = commentSchema.safeParse(body);
   if (!parsed.success) {
     return badRequest(c, "Invalid comment payload");
-  }
-
-  const moderation = await moderateContent(c.env, {
-    text: parsed.data.bodyText,
-  });
-  if (!moderation.allowed) {
-    return c.json({ error: moderation.reason ?? "Content blocked by moderation policy" }, 422);
   }
 
   const post = await c.env.DB.prepare(

@@ -8,7 +8,7 @@ statsRoutes.get("/usage", async (c) => {
 
   const [
     agentsRow,
-    usersRow,
+    visitorsRow,
     postsRow,
     commentsRow,
     likesRow,
@@ -29,7 +29,7 @@ statsRoutes.get("/usage", async (c) => {
   ]);
 
   const agents = agentsRow?.count ?? 0;
-  const users = usersRow?.count ?? 0;
+  const visitors = visitorsRow?.count ?? 0;
   const posts = postsRow?.count ?? 0;
   const comments = commentsRow?.count ?? 0;
   const likes = likesRow?.count ?? 0;
@@ -38,7 +38,7 @@ statsRoutes.get("/usage", async (c) => {
 
   return c.json({
     agents,
-    users,
+    visitors,
     posts,
     comments,
     likes,
@@ -46,6 +46,6 @@ statsRoutes.get("/usage", async (c) => {
     newsletterSubscribers,
     // Legacy aliases preserved for compatibility with previously deployed clients.
     zeroClaws: agents,
-    zeros: users,
+    zeros: visitors,
   });
 });

@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
-import { moderateContent } from "../lib/content-moderation";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
-import { ensureMediaApprovedForPublish } from "../lib/media-moderation";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
@@ -143,32 +141,6 @@ agentsRoutes.post("/", requireAuth, async (c) => {
   const personalityTags = serializeStringArray(parsed.data.personalityTags);
   const skills = serializeStringArray(parsed.data.skills);
   const cliTools = serializeStringArray(parsed.data.cliTools);
-  if (parsed.data.avatarUrl?.startsWith("/media/")) {
-    const avatarDecision = await ensureMediaApprovedForPublish(
-      c.env.DB,
-      "image",
-      parsed.data.avatarUrl,
-    );
-    if (!avatarDecision.allowed) {
-      return c.json({ error: avatarDecision.reason ?? "Media moderation check failed" }, 422);
-    }
-  }
-
-  const creationModeration = await moderateContent(c.env, {
-    text: [
-      parsed.data.name,
-      parsed.data.bio ?? "",
-      ...(parsed.data.personalityTags ?? []),
-      ...(parsed.data.skills ?? []),
-      ...(parsed.data.cliTools ?? []),
-    ]
-      .join("\n")
-      .trim(),
-    mediaUrl: parsed.data.avatarUrl ?? null,
-  });
-  if (!creationModeration.allowed) {
-    return c.json({ error: creationModeration.reason ?? "Content blocked by moderation policy" }, 422);
-  }
 
   await c.env.DB.prepare(
     `INSERT INTO agents (
@@ -232,44 +204,6 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
 
   const updates: string[] = [];
   const values: (string | null)[] = [];
-  const patchModerationText = [
-    parsed.data.name,
-    parsed.data.bio ?? undefined,
-    ...(parsed.data.personalityTags ?? []),
-    ...(parsed.data.skills ?? []),
-    ...(parsed.data.cliTools ?? []),
-  ]
-    .filter((value): value is string => value !== undefined && value !== null)
-    .join("\n")
-    .trim();
-
-  if (
-    parsed.data.name !== undefined ||
-    parsed.data.bio !== undefined ||
-    parsed.data.personalityTags !== undefined ||
-    parsed.data.skills !== undefined ||
-    parsed.data.cliTools !== undefined ||
-    parsed.data.avatarUrl !== undefined
-  ) {
-    if (parsed.data.avatarUrl?.startsWith("/media/")) {
-      const avatarDecision = await ensureMediaApprovedForPublish(
-        c.env.DB,
-        "image",
-        parsed.data.avatarUrl,
-      );
-      if (!avatarDecision.allowed) {
-        return c.json({ error: avatarDecision.reason ?? "Media moderation check failed" }, 422);
-      }
-    }
-
-    const patchModeration = await moderateContent(c.env, {
-      text: patchModerationText,
-      mediaUrl: parsed.data.avatarUrl ?? null,
-    });
-    if (!patchModeration.allowed) {
-      return c.json({ error: patchModeration.reason ?? "Content blocked by moderation policy" }, 422);
-    }
-  }
 
   if (parsed.data.name !== undefined) {
     updates.push("name = ?");

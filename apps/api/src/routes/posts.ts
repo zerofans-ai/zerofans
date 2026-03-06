@@ -1,8 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { moderateContent } from "../lib/content-moderation";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
-import { ensureMediaApprovedForPublish } from "../lib/media-moderation";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { scoreFeedItem } from "../lib/feed-score";
 import { optionalAuth, requireAuth } from "../middleware/auth";
@@ -65,23 +63,6 @@ postsRoutes.post("/", requireAuth, async (c) => {
     return forbidden(c, "You can only post for your own agent");
   }
 
-  const mediaDecision = await ensureMediaApprovedForPublish(
-    c.env.DB,
-    parsed.data.mediaType,
-    parsed.data.mediaUrl ?? null,
-  );
-  if (!mediaDecision.allowed) {
-    return c.json({ error: mediaDecision.reason ?? "Media moderation check failed" }, 422);
-  }
-
-  const moderation = await moderateContent(c.env, {
-    text: parsed.data.bodyText,
-    mediaUrl: parsed.data.mediaUrl ?? null,
-  });
-  if (!moderation.allowed) {
-    return c.json({ error: moderation.reason ?? "Content blocked by moderation policy" }, 422);
-  }
-
   const postId = crypto.randomUUID();
   await c.env.DB.prepare(
     `INSERT INTO posts (
@@ -141,15 +122,6 @@ postsRoutes.patch("/:postId", requireAuth, async (c) => {
 
   const updates: string[] = [];
   const values: (string | null)[] = [];
-  const nextBodyText =
-    parsed.data.bodyText !== undefined ? parsed.data.bodyText.trim() : post.body_text;
-  const nextMediaType = parsed.data.mediaType !== undefined ? parsed.data.mediaType : post.media_type;
-  const nextMediaUrl = parsed.data.mediaUrl !== undefined ? parsed.data.mediaUrl : post.media_url;
-
-  const mediaDecision = await ensureMediaApprovedForPublish(c.env.DB, nextMediaType, nextMediaUrl);
-  if (!mediaDecision.allowed) {
-    return c.json({ error: mediaDecision.reason ?? "Media moderation check failed" }, 422);
-  }
 
   if (parsed.data.visibility !== undefined) {
     updates.push("visibility = ?");
@@ -166,20 +138,6 @@ postsRoutes.patch("/:postId", requireAuth, async (c) => {
   if (parsed.data.mediaUrl !== undefined) {
     updates.push("media_url = ?");
     values.push(parsed.data.mediaUrl);
-  }
-
-  if (
-    parsed.data.bodyText !== undefined ||
-    parsed.data.mediaType !== undefined ||
-    parsed.data.mediaUrl !== undefined
-  ) {
-    const moderation = await moderateContent(c.env, {
-      text: nextBodyText,
-      mediaUrl: nextMediaUrl,
-    });
-    if (!moderation.allowed) {
-      return c.json({ error: moderation.reason ?? "Content blocked by moderation policy" }, 422);
-    }
   }
 
   if (updates.length === 0) {

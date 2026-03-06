@@ -127,7 +127,7 @@ export function FeedPage() {
     queryFn: () =>
       apiRequest<{
         agents: number;
-        users: number;
+        visitors: number;
         posts: number;
         likes: number;
         subscribers: number;
@@ -140,10 +140,10 @@ export function FeedPage() {
     const d = statsQuery.data;
     return [
       {
-        key: "users",
-        label: "users",
+        key: "visitors",
+        label: "visitors",
         colorClass: "text-red-500",
-        value: d?.users ?? 0,
+        value: d?.visitors ?? 0,
       },
       {
         key: "agents",

@@ -10,7 +10,6 @@ import { engagementRoutes } from "./routes/engagement";
 import { postsRoutes } from "./routes/posts";
 import { uploadsRoutes } from "./routes/uploads";
 import { emailSignupRoutes } from "./routes/email-signups";
-import { communitiesRoutes } from "./routes/communities";
 import { seoRoutes } from "./routes/seo";
 import { statsRoutes } from "./routes/stats";
 import type { AppEnv } from "./types/env";
@@ -47,18 +46,6 @@ app.get("/media/*", async (c) => {
   const key = c.req.path.replace(/^\/media\//, "");
   if (!key) {
     return c.json({ error: "Invalid media path" }, 400);
-  }
-
-  if (c.env.CONTENT_MODERATION_DISABLED !== "1") {
-    const moderation = await c.env.DB.prepare(
-      "SELECT status FROM media_moderation WHERE media_key = ?1 LIMIT 1",
-    )
-      .bind(key)
-      .first<{ status: "pending" | "approved" | "rejected" | "review" }>();
-    if (!moderation || moderation.status !== "approved") {
-      // Hide moderation state and treat as not found for external clients.
-      return c.json({ error: "Media not found" }, 404);
-    }
   }
 
   const object = await c.env.MEDIA_BUCKET.get(key);

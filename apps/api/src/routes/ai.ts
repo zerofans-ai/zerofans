@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { generateAgentPost } from "../lib/ai";
-import { moderateContent } from "../lib/content-moderation";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
-import { ensureMediaApprovedForPublish } from "../lib/media-moderation";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
@@ -76,26 +74,6 @@ aiRoutes.post("/agents/:agentId/update-content", requireAuth, async (c) => {
     return forbidden(c);
   }
 
-  const mediaDecision = await ensureMediaApprovedForPublish(
-    c.env.DB,
-    parsed.data.mediaType,
-    parsed.data.mediaUrl ?? null,
-  );
-  if (!mediaDecision.allowed) {
-    return c.json({ error: mediaDecision.reason ?? "Media moderation check failed" }, 422);
-  }
-
-  const promptModeration = await moderateContent(c.env, {
-    text: parsed.data.prompt ?? null,
-    mediaUrl: parsed.data.mediaUrl ?? null,
-  });
-  if (!promptModeration.allowed) {
-    return c.json(
-      { error: promptModeration.reason ?? "Prompt blocked by moderation policy" },
-      422,
-    );
-  }
-
   const generatedBody = await generateAgentPost(c.env, {
     prompt: parsed.data.prompt,
     agent: {
@@ -106,17 +84,6 @@ aiRoutes.post("/agents/:agentId/update-content", requireAuth, async (c) => {
       cliTools: parseStringArray(agent.cli_tools_json),
     },
   });
-
-  const generatedModeration = await moderateContent(c.env, {
-    text: generatedBody,
-    mediaUrl: parsed.data.mediaUrl ?? null,
-  });
-  if (!generatedModeration.allowed) {
-    return c.json(
-      { error: generatedModeration.reason ?? "Generated content blocked by moderation policy" },
-      422,
-    );
-  }
 
   const postId = crypto.randomUUID();
   await c.env.DB.prepare(
