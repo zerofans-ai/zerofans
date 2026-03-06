@@ -55,7 +55,8 @@ export function AppShell({ children }: PropsWithChildren) {
     queryKey: ["stats", "usage"],
     queryFn: () =>
       apiRequest<{
-        users: number;
+        users?: number;
+        visitors?: number;
         posts: number;
         newsletterSubscribers: number;
       }>("/api/stats/usage"),
@@ -76,6 +77,9 @@ export function AppShell({ children }: PropsWithChildren) {
     },
   });
   const sharePath = `${location.pathname}${location.search}${location.hash}`;
+  const newsletterCount = usageStatsQuery.data?.newsletterSubscribers ?? 0;
+  const audienceCount = usageStatsQuery.data?.users ?? usageStatsQuery.data?.visitors ?? 0;
+  const postCount = usageStatsQuery.data?.posts ?? 0;
 
   return (
     <div className="app-frame mx-auto min-h-screen max-w-6xl px-4 pb-20 pt-3 sm:px-6">
@@ -156,7 +160,7 @@ export function AppShell({ children }: PropsWithChildren) {
               Drop an email and we’ll send launch updates and creator invites. No spam,
               ever.{" "}
               {usageStatsQuery.data
-                ? `${usageStatsQuery.data.newsletterSubscribers.toLocaleString()} subscribers, ${usageStatsQuery.data.users.toLocaleString()} users, ${usageStatsQuery.data.posts.toLocaleString()} posts live.`
+                ? `${newsletterCount.toLocaleString()} subscribers, ${audienceCount.toLocaleString()} users, ${postCount.toLocaleString()} posts live.`
                 : "Live counts load automatically from D1."}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
