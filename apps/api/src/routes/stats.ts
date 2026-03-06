@@ -3,6 +3,23 @@ import type { AppEnv } from "../types/env";
 
 export const statsRoutes = new Hono<AppEnv>();
 
+// Root stats endpoint
+statsRoutes.get("/", async (c) => {
+  const db = c.env.DB;
+
+  const [agentsRow, visitorsRow, postsRow] = await Promise.all([
+    db.prepare("SELECT COUNT(*) AS count FROM agents").first<{ count: number }>(),
+    db.prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>(),
+    db.prepare("SELECT COUNT(*) AS count FROM posts WHERE deleted_at IS NULL").first<{ count: number }>(),
+  ]);
+
+  return c.json({
+    agents: agentsRow?.count ?? 0,
+    visitors: visitorsRow?.count ?? 0,
+    posts: postsRow?.count ?? 0,
+  });
+});
+
 statsRoutes.get("/usage", async (c) => {
   const db = c.env.DB;
 
