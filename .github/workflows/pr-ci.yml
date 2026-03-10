@@ -25,8 +25,28 @@ jobs:
             echo "JWT_SECRET=ci-contract-secret" >> apps/api/.dev.vars
           fi
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('packages/ranking-wasm/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
       - name: Install Dependencies
         run: bun install
+
+      - name: Build WASM
+        run: bun run --cwd packages/ranking-wasm build
 
       - name: Typecheck
         run: bun run typecheck
