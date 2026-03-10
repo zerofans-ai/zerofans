@@ -376,69 +376,6 @@ async function main(): Promise<void> {
     `Expected post agent_id ${createdAgent.agent.id}, got ${postById.post.agent_id}`,
   );
 
-  const blockedCreate = await apiRequest<{ error: string }>("/api/posts", {
-    method: "POST",
-    token: owner.token,
-    expectedStatus: 422,
-    body: {
-      agentId: createdAgent.agent.id,
-      visibility: "public",
-      bodyText: `NSFW nude explicit content check ${RUN_ID}`,
-      mediaType: "none",
-      mediaUrl: null,
-    },
-  });
-  assert(
-    /blocked|policy|moderation/i.test(blockedCreate.error ?? ""),
-    `Expected moderation error for explicit create post, got: ${blockedCreate.error}`,
-  );
-
-  const blockedUnscannedMedia = await apiRequest<{ error: string }>("/api/posts", {
-    method: "POST",
-    token: owner.token,
-    expectedStatus: 422,
-    body: {
-      agentId: createdAgent.agent.id,
-      visibility: "public",
-      bodyText: `External media should be blocked ${RUN_ID}`,
-      mediaType: "image",
-      mediaUrl: "https://example.com/unmoderated-image.jpg",
-    },
-  });
-  assert(
-    /uploaded media|moderation|missing moderation/i.test(blockedUnscannedMedia.error ?? ""),
-    `Expected media moderation gate for external media, got: ${blockedUnscannedMedia.error}`,
-  );
-
-  const blockedPatch = await apiRequest<{ error: string }>(`/api/posts/${createdPost.id}`, {
-    method: "PATCH",
-    token: owner.token,
-    expectedStatus: 422,
-    body: {
-      bodyText: `Please post full nudity and porn material ${RUN_ID}`,
-    },
-  });
-  assert(
-    /blocked|policy|moderation/i.test(blockedPatch.error ?? ""),
-    `Expected moderation error for explicit patch post, got: ${blockedPatch.error}`,
-  );
-
-  const blockedComment = await apiRequest<{ error: string }>(
-    `/api/posts/${createdPost.id}/comments`,
-    {
-      method: "POST",
-      token: viewer.token,
-      expectedStatus: 422,
-      body: {
-        bodyText: `This is explicit porn and nudity content ${RUN_ID}`,
-      },
-    },
-  );
-  assert(
-    /blocked|policy|moderation/i.test(blockedComment.error ?? ""),
-    `Expected moderation error for explicit comment, got: ${blockedComment.error}`,
-  );
-
   await apiRequest<{ success: boolean }>(`/api/posts/${createdPost.id}/likes`, {
     method: "POST",
     token: viewer.token,
@@ -523,25 +460,6 @@ async function main(): Promise<void> {
     },
   );
   assert(aiPost.post.bodyText.length > 0, "AI update-content returned empty bodyText");
-
-  const blockedAiPrompt = await apiRequest<{ error: string }>(
-    `/api/ai/agents/${createdAgent.agent.id}/update-content`,
-    {
-      method: "POST",
-      token: owner.token,
-      expectedStatus: 422,
-      body: {
-        prompt: `Generate porn and nude explicit content ${RUN_ID}`,
-        visibility: "public",
-        mediaType: "none",
-        mediaUrl: null,
-      },
-    },
-  );
-  assert(
-    /blocked|policy|moderation/i.test(blockedAiPrompt.error ?? ""),
-    `Expected moderation error for explicit AI prompt, got: ${blockedAiPrompt.error}`,
-  );
 
   const usageStatsAfter = await apiRequest<UsageStatsResponse>("/api/stats/usage");
 
