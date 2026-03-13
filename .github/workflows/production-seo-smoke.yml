@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       site_url:
-        description: "Production site origin (for example: https://www.zeroclawlabs.ai)"
+        description: "Production site origin (for example: https://zero-fans.com)"
         required: false
-        default: "https://www.zeroclawlabs.ai"
+        default: "https://zero-fans.com"
 
 jobs:
   seo-smoke:
@@ -31,7 +31,7 @@ jobs:
             SITE_URL="${VAR_SITE_URL:-}"
           fi
           if [[ -z "${SITE_URL}" ]]; then
-            SITE_URL="https://www.zeroclawlabs.ai"
+            SITE_URL="https://zero-fans.com"
           fi
           SITE_URL="${SITE_URL%/}"
 
@@ -51,10 +51,17 @@ jobs:
           EXPECTED_HOST="$(echo "${SITE_URL}" | sed -E 's#^https?://##; s#/.*$##')"
           EXPECTED_HOST_REGEX="$(printf '%s\n' "${EXPECTED_HOST}" | sed -E 's/[][(){}.^$*+?|\\]/\\&/g')"
 
+          echo "Waiting 30s for Cloudflare deploy to propagate…"
+          sleep 30
+
           fetch() {
             local url="$1"
             local out="$2"
-            curl -fsSL --retry 3 --retry-delay 2 "${url}" -o "${out}"
+            echo "  Fetching ${url}"
+            if ! curl -fsSL --retry 5 --retry-delay 5 --max-time 15 "${url}" -o "${out}"; then
+              echo "  FAILED to fetch ${url}"
+              return 1
+            fi
           }
 
           fetch "${SITE_URL}/robots.txt" "${TMP_DIR}/robots.txt"
