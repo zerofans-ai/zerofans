@@ -79,6 +79,21 @@ engagementRoutes.post("/subscriptions/:agentId", requireAuth, async (c) => {
   return c.json({ success: true });
 });
 
+engagementRoutes.delete("/subscriptions/:agentId", requireAuth, async (c) => {
+  const authUser = c.get("authUser");
+  if (!authUser) {
+    return unauthorized(c);
+  }
+
+  await c.env.DB.prepare(
+    "DELETE FROM subscriptions WHERE user_id = ?1 AND agent_id = ?2",
+  )
+    .bind(authUser.id, c.req.param("agentId"))
+    .run();
+
+  return c.json({ success: true });
+});
+
 engagementRoutes.post("/posts/:postId/likes", requireAuth, async (c) => {
   const authUser = c.get("authUser");
   if (!authUser) {

@@ -18,6 +18,8 @@ interface CommunityPayload {
     description: string | null;
     coverImageUrl: string | null;
     rules: string[];
+    isFollowed?: boolean;
+    isSubscribed?: boolean;
     agent: {
       name: string;
       slug: string;
@@ -72,9 +74,9 @@ export function CommunityPathPage() {
   });
 
   const followMutation = useMutation({
-    mutationFn: (agentId: string) =>
+    mutationFn: ({ agentId, unfollow }: { agentId: string; unfollow: boolean }) =>
       apiRequest<{ success: boolean }>(`/api/follows/${agentId}`, {
-        method: "POST",
+        method: unfollow ? "DELETE" : "POST",
         token,
       }),
     onSuccess: () => {
@@ -83,9 +85,9 @@ export function CommunityPathPage() {
   });
 
   const subscribeMutation = useMutation({
-    mutationFn: (agentId: string) =>
+    mutationFn: ({ agentId, unsubscribe }: { agentId: string; unsubscribe: boolean }) =>
       apiRequest<{ success: boolean }>(`/api/subscriptions/${agentId}`, {
-        method: "POST",
+        method: unsubscribe ? "DELETE" : "POST",
         token,
       }),
     onSuccess: () => {
@@ -132,7 +134,8 @@ export function CommunityPathPage() {
     agent_slug: community.agent.slug,
     likes_count: post.likes_count ?? 0,
     comments_count: post.comments_count ?? 0,
-    is_followed_agent: 0,
+    is_followed_agent: community.isFollowed ? 1 : 0,
+    has_subscribed_agent: community.isSubscribed ? 1 : 0,
   }));
 
   return (
@@ -228,17 +231,39 @@ export function CommunityPathPage() {
               </Link>
               <button
                 type="button"
-                onClick={() => followMutation.mutate(community.agentId)}
-                className="rounded-xl border border-tide/30 bg-mint px-4 py-2 text-sm font-semibold text-ink"
+                disabled={followMutation.isPending}
+                onClick={() =>
+                  followMutation.mutate({
+                    agentId: community.agentId,
+                    unfollow: Boolean(community.isFollowed),
+                  })
+                }
+                className={[
+                  "rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-50",
+                  community.isFollowed
+                    ? "border border-ember/40 bg-ember/10 text-ember"
+                    : "border border-tide/30 bg-mint text-ink",
+                ].join(" ")}
               >
-                Follow
+                {community.isFollowed ? "Following" : "Follow"}
               </button>
               <button
                 type="button"
-                onClick={() => subscribeMutation.mutate(community.agentId)}
-                className="rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"
+                disabled={subscribeMutation.isPending}
+                onClick={() =>
+                  subscribeMutation.mutate({
+                    agentId: community.agentId,
+                    unsubscribe: Boolean(community.isSubscribed),
+                  })
+                }
+                className={[
+                  "rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-50",
+                  community.isSubscribed
+                    ? "border border-ember/40 bg-ember/15 text-ember"
+                    : "bg-ember text-white",
+                ].join(" ")}
               >
-                Subscribe
+                {community.isSubscribed ? "Subscribed" : "Subscribe"}
               </button>
             </div>
           </div>

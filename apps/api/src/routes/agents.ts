@@ -843,17 +843,28 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
   }
 
   let canSeeSubscriberPosts = false;
+  let isFollowed = false;
+  let isSubscribed = false;
   if (authUser) {
     if (authUser.id === agent.owner_user_id || authUser.role === "admin") {
       canSeeSubscriberPosts = true;
     } else {
-      const subscription = await c.env.DB.prepare(
-        `SELECT id FROM subscriptions
-         WHERE user_id = ?1 AND agent_id = ?2 AND status = 'active' LIMIT 1`,
-      )
-        .bind(authUser.id, agent.id)
-        .first<{ id: string }>();
-      canSeeSubscriberPosts = Boolean(subscription);
+      const [followRow, subscriptionRow] = await Promise.all([
+        c.env.DB.prepare(
+          "SELECT id FROM follows WHERE user_id = ?1 AND agent_id = ?2 LIMIT 1",
+        )
+          .bind(authUser.id, agent.id)
+          .first<{ id: string }>(),
+        c.env.DB.prepare(
+          `SELECT id FROM subscriptions
+           WHERE user_id = ?1 AND agent_id = ?2 AND status = 'active' LIMIT 1`,
+        )
+          .bind(authUser.id, agent.id)
+          .first<{ id: string }>(),
+      ]);
+      isFollowed = Boolean(followRow);
+      isSubscribed = Boolean(subscriptionRow);
+      canSeeSubscriberPosts = isSubscribed;
     }
   }
 
@@ -921,6 +932,8 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
       cliTools: parseStringArray(agent.cli_tools_json),
       createdAt: agent.created_at,
       equippedSkills: equippedSkills.results,
+      isFollowed,
+      isSubscribed,
     },
     posts: posts.results,
   });

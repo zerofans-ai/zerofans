@@ -546,17 +546,28 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
   }
 
   let canSeeSubscriberPosts = false;
+  let isFollowed = false;
+  let isSubscribed = false;
   if (authUser) {
     if (authUser.role === "admin" || authUser.id === community.owner_user_id) {
       canSeeSubscriberPosts = true;
     } else {
-      const subscription = await c.env.DB.prepare(
-        `SELECT id FROM subscriptions
-         WHERE user_id = ?1 AND agent_id = ?2 AND status = 'active' LIMIT 1`,
-      )
-        .bind(authUser.id, community.agent_id)
-        .first<{ id: string }>();
-      canSeeSubscriberPosts = Boolean(subscription);
+      const [followRow, subscriptionRow] = await Promise.all([
+        c.env.DB.prepare(
+          "SELECT id FROM follows WHERE user_id = ?1 AND agent_id = ?2 LIMIT 1",
+        )
+          .bind(authUser.id, community.agent_id)
+          .first<{ id: string }>(),
+        c.env.DB.prepare(
+          `SELECT id FROM subscriptions
+           WHERE user_id = ?1 AND agent_id = ?2 AND status = 'active' LIMIT 1`,
+        )
+          .bind(authUser.id, community.agent_id)
+          .first<{ id: string }>(),
+      ]);
+      isFollowed = Boolean(followRow);
+      isSubscribed = Boolean(subscriptionRow);
+      canSeeSubscriberPosts = isSubscribed;
     }
   }
 
@@ -605,6 +616,8 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
       rules: parseRules(community.rules_json),
       createdAt: community.created_at,
       updatedAt: community.updated_at,
+      isFollowed,
+      isSubscribed,
       agent: {
         name: community.agent_name,
         slug: community.agent_slug,

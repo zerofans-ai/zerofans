@@ -19,6 +19,8 @@ interface AgentPayload {
     personalityTags: string[];
     skills: string[];
     cliTools: string[];
+    isFollowed?: boolean;
+    isSubscribed?: boolean;
   };
   posts: Array<{
     id: string;
@@ -45,9 +47,9 @@ export function AgentPage() {
   });
 
   const followMutation = useMutation({
-    mutationFn: (agentId: string) =>
+    mutationFn: ({ agentId, unfollow }: { agentId: string; unfollow: boolean }) =>
       apiRequest<{ success: boolean }>(`/api/follows/${agentId}`, {
-        method: "POST",
+        method: unfollow ? "DELETE" : "POST",
         token,
       }),
     onSuccess: () => {
@@ -56,9 +58,9 @@ export function AgentPage() {
   });
 
   const subscribeMutation = useMutation({
-    mutationFn: (agentId: string) =>
+    mutationFn: ({ agentId, unsubscribe }: { agentId: string; unsubscribe: boolean }) =>
       apiRequest<{ success: boolean }>(`/api/subscriptions/${agentId}`, {
-        method: "POST",
+        method: unsubscribe ? "DELETE" : "POST",
         token,
       }),
     onSuccess: () => {
@@ -104,7 +106,8 @@ export function AgentPage() {
       agent_slug: data.agent.slug,
       comments_count: post.comments_count ?? 0,
       likes_count: post.likes_count ?? 0,
-      is_followed_agent: 0,
+      is_followed_agent: data.agent.isFollowed ? 1 : 0,
+      has_subscribed_agent: data.agent.isSubscribed ? 1 : 0,
     })) ?? [];
 
   const ensureAuth = (): boolean => {
@@ -203,23 +206,41 @@ export function AgentPage() {
             />
             <button
               type="button"
+              disabled={followMutation.isPending}
               onClick={() => {
                 if (!ensureAuth()) return;
-                followMutation.mutate(data.agent.id);
+                followMutation.mutate({
+                  agentId: data.agent.id,
+                  unfollow: Boolean(data.agent.isFollowed),
+                });
               }}
-              className="rounded-xl border border-tide/30 bg-mint px-4 py-2 text-sm font-semibold text-ink"
+              className={[
+                "rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-50",
+                data.agent.isFollowed
+                  ? "border border-ember/40 bg-ember/10 text-ember"
+                  : "border border-tide/30 bg-mint text-ink",
+              ].join(" ")}
             >
-              Follow
+              {data.agent.isFollowed ? "Following" : "Follow"}
             </button>
             <button
               type="button"
+              disabled={subscribeMutation.isPending}
               onClick={() => {
                 if (!ensureAuth()) return;
-                subscribeMutation.mutate(data.agent.id);
+                subscribeMutation.mutate({
+                  agentId: data.agent.id,
+                  unsubscribe: Boolean(data.agent.isSubscribed),
+                });
               }}
-              className="rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"
+              className={[
+                "rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-50",
+                data.agent.isSubscribed
+                  ? "border border-ember/40 bg-ember/15 text-ember"
+                  : "bg-ember text-white",
+              ].join(" ")}
             >
-              Subscribe
+              {data.agent.isSubscribed ? "Subscribed" : "Subscribe"}
             </button>
           </div>
         </div>
