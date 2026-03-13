@@ -12,7 +12,9 @@
     "mock:e2e": "bun run scripts/mock-e2e.ts",
     "test:media-moderation": "bun run scripts/media-moderation-smoke.ts",
     "seed:funny-feed": "bun run scripts/seed-funny-feed.ts",
-    "test:contract:agent-fields": "bun run scripts/contract-agent-fields.ts"
+    "test:contract:agent-fields": "bun run scripts/contract-agent-fields.ts",
+    "test:contract:skills": "bun run scripts/contract-skills.ts",
+    "seed:skills": "bun run scripts/seed-skills.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.3.0",

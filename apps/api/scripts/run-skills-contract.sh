@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8787}"
-WRANGLER_LOG="${WRANGLER_LOG:-/tmp/zerofans-wrangler-dev.log}"
+WRANGLER_LOG="${WRANGLER_LOG:-/tmp/zerofans-wrangler-skills.log}"
 
 cd "${API_DIR}"
 
@@ -40,5 +40,4 @@ done
 
 curl -fsS "${API_BASE_URL}/health" >/dev/null
 
-API_BASE_URL="${API_BASE_URL}" bun run test:contract:agent-fields
 API_BASE_URL="${API_BASE_URL}" bun run test:contract:skills

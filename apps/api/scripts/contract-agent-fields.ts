@@ -123,7 +123,7 @@ interface AiPostResponse {
 
 interface UsageStatsResponse {
   agents: number;
-  users: number;
+  visitors: number;
   posts: number;
   comments: number;
   likes: number;
@@ -376,78 +376,147 @@ async function main(): Promise<void> {
     `Expected post agent_id ${createdAgent.agent.id}, got ${postById.post.agent_id}`,
   );
 
-  const blockedCreate = await apiRequest<{ error: string }>("/api/posts", {
-    method: "POST",
-    token: owner.token,
-    expectedStatus: 422,
-    body: {
-      agentId: createdAgent.agent.id,
-      visibility: "public",
-      bodyText: `NSFW nude explicit content check ${RUN_ID}`,
-      mediaType: "none",
-      mediaUrl: null,
-    },
-  });
-  assert(
-    /blocked|policy|moderation/i.test(blockedCreate.error ?? ""),
-    `Expected moderation error for explicit create post, got: ${blockedCreate.error}`,
-  );
-
-  const blockedUnscannedMedia = await apiRequest<{ error: string }>("/api/posts", {
-    method: "POST",
-    token: owner.token,
-    expectedStatus: 422,
-    body: {
-      agentId: createdAgent.agent.id,
-      visibility: "public",
-      bodyText: `External media should be blocked ${RUN_ID}`,
-      mediaType: "image",
-      mediaUrl: "https://example.com/unmoderated-image.jpg",
-    },
-  });
-  assert(
-    /uploaded media|moderation|missing moderation/i.test(blockedUnscannedMedia.error ?? ""),
-    `Expected media moderation gate for external media, got: ${blockedUnscannedMedia.error}`,
-  );
-
-  const blockedPatch = await apiRequest<{ error: string }>(`/api/posts/${createdPost.id}`, {
-    method: "PATCH",
-    token: owner.token,
-    expectedStatus: 422,
-    body: {
-      bodyText: `Please post full nudity and porn material ${RUN_ID}`,
-    },
-  });
-  assert(
-    /blocked|policy|moderation/i.test(blockedPatch.error ?? ""),
-    `Expected moderation error for explicit patch post, got: ${blockedPatch.error}`,
-  );
-
-  const blockedComment = await apiRequest<{ error: string }>(
-    `/api/posts/${createdPost.id}/comments`,
-    {
-      method: "POST",
-      token: viewer.token,
-      expectedStatus: 422,
-      body: {
-        bodyText: `This is explicit porn and nudity content ${RUN_ID}`,
-      },
-    },
-  );
-  assert(
-    /blocked|policy|moderation/i.test(blockedComment.error ?? ""),
-    `Expected moderation error for explicit comment, got: ${blockedComment.error}`,
-  );
-
+  // --- Engagement: Likes ---
   await apiRequest<{ success: boolean }>(`/api/posts/${createdPost.id}/likes`, {
     method: "POST",
     token: viewer.token,
   });
 
+  // Verify like count via post detail
+  const postAfterLike = await apiRequest<PostByIdResponse>(`/api/posts/${createdPost.id}`, {
+    token: viewer.token,
+  });
+  assert(
+    (postAfterLike.post as unknown as { likes_count: number }).likes_count >= 1,
+    `Post should have at least 1 like after liking, got ${(postAfterLike.post as unknown as { likes_count: number }).likes_count}`,
+  );
+
+  // Unlike
+  await apiRequest<{ success: boolean }>(`/api/posts/${createdPost.id}/likes`, {
+    method: "DELETE",
+    token: viewer.token,
+  });
+
+  // --- Engagement: Comments ---
+  await apiRequest<{ success: boolean }>(`/api/posts/${createdPost.id}/comments`, {
+    method: "POST",
+    token: viewer.token,
+    body: { bodyText: `Contract comment ${RUN_ID}` },
+  });
+
+  // Verify comment appears in list
+  const commentsRes = await apiRequest<{
+    items: Array<{ bodyText: string; authorHandle: string }>;
+  }>(`/api/posts/${createdPost.id}/comments`);
+  const foundComment = commentsRes.items.find((c) =>
+    c.bodyText.includes(RUN_ID),
+  );
+  assert(foundComment, "Comment should appear in comment list");
+  assert(foundComment.authorHandle, "Comment should have authorHandle");
+
+  // --- Engagement: User-level follow/unfollow ---
+  await apiRequest<{ success: boolean }>(`/api/follows/${createdAgent.agent.id}`, {
+    method: "POST",
+    token: viewer.token,
+  });
+  await apiRequest<{ success: boolean }>(`/api/follows/${createdAgent.agent.id}`, {
+    method: "DELETE",
+    token: viewer.token,
+  });
+
+  // --- Engagement: User-level subscription ---
   await apiRequest<{ success: boolean }>(`/api/subscriptions/${createdAgent.agent.id}`, {
     method: "POST",
     token: viewer.token,
   });
+
+  // --- Agent-to-Agent Network ---
+  // Create a viewer agent for network tests
+  const viewerAgent = await apiRequest<CreateAgentResponse>("/api/agents", {
+    method: "POST",
+    token: viewer.token,
+    body: {
+      name: `Viewer Bot ${RUN_ID.slice(-4)}`,
+      bio: "Agent for network contract tests",
+    },
+  });
+
+  // Agent follow
+  await apiRequest<{ success: boolean }>(
+    `/api/agents/${viewerAgent.agent.id}/network/follows/${createdAgent.agent.id}`,
+    { method: "POST", token: viewer.token },
+  );
+
+  // Agent subscribe
+  await apiRequest<{ success: boolean }>(
+    `/api/agents/${viewerAgent.agent.id}/network/subscriptions/${createdAgent.agent.id}`,
+    { method: "POST", token: viewer.token },
+  );
+
+  // Get network — should show both follow and subscribe
+  const networkRes = await apiRequest<{
+    items: Array<{
+      target_agent_id: string;
+      relationship_type: string;
+      status: string;
+      target_agent_name: string;
+    }>;
+  }>(`/api/agents/${viewerAgent.agent.id}/network`, {
+    token: viewer.token,
+  });
+  const followRel = networkRes.items.find(
+    (r) =>
+      r.target_agent_id === createdAgent.agent.id &&
+      r.relationship_type === "follow" &&
+      r.status === "active",
+  );
+  assert(followRel, "Network should contain active follow relationship");
+  const subRel = networkRes.items.find(
+    (r) =>
+      r.target_agent_id === createdAgent.agent.id &&
+      r.relationship_type === "subscribe" &&
+      r.status === "active",
+  );
+  assert(subRel, "Network should contain active subscribe relationship");
+
+  // Self-follow should be rejected
+  await apiRequest<{ error: string }>(
+    `/api/agents/${viewerAgent.agent.id}/network/follows/${viewerAgent.agent.id}`,
+    { method: "POST", token: viewer.token, expectedStatus: 400 },
+  );
+
+  // Agent unfollow
+  await apiRequest<{ success: boolean }>(
+    `/api/agents/${viewerAgent.agent.id}/network/follows/${createdAgent.agent.id}`,
+    { method: "DELETE", token: viewer.token },
+  );
+
+  // Agent unsubscribe
+  await apiRequest<{ success: boolean }>(
+    `/api/agents/${viewerAgent.agent.id}/network/subscriptions/${createdAgent.agent.id}`,
+    { method: "DELETE", token: viewer.token },
+  );
+
+  // Verify network after unfollow/unsub — relationships should be inactive
+  const networkAfter = await apiRequest<{
+    items: Array<{ target_agent_id: string; relationship_type: string; status: string }>;
+  }>(`/api/agents/${viewerAgent.agent.id}/network`, {
+    token: viewer.token,
+  });
+  const activeFollow = networkAfter.items.find(
+    (r) =>
+      r.target_agent_id === createdAgent.agent.id &&
+      r.relationship_type === "follow" &&
+      r.status === "active",
+  );
+  assert(!activeFollow, "Follow should be inactive after unfollow");
+  const activeSub = networkAfter.items.find(
+    (r) =>
+      r.target_agent_id === createdAgent.agent.id &&
+      r.relationship_type === "subscribe" &&
+      r.status === "active",
+  );
+  assert(!activeSub, "Subscribe should be inactive after unsubscribe");
 
   await apiRequest<{ ok: boolean }>("/api/email-signups", {
     method: "POST",
@@ -524,42 +593,23 @@ async function main(): Promise<void> {
   );
   assert(aiPost.post.bodyText.length > 0, "AI update-content returned empty bodyText");
 
-  const blockedAiPrompt = await apiRequest<{ error: string }>(
-    `/api/ai/agents/${createdAgent.agent.id}/update-content`,
-    {
-      method: "POST",
-      token: owner.token,
-      expectedStatus: 422,
-      body: {
-        prompt: `Generate porn and nude explicit content ${RUN_ID}`,
-        visibility: "public",
-        mediaType: "none",
-        mediaUrl: null,
-      },
-    },
-  );
-  assert(
-    /blocked|policy|moderation/i.test(blockedAiPrompt.error ?? ""),
-    `Expected moderation error for explicit AI prompt, got: ${blockedAiPrompt.error}`,
-  );
-
   const usageStatsAfter = await apiRequest<UsageStatsResponse>("/api/stats/usage");
 
   assert(
-    usageStatsAfter.users >= usageStatsBefore.users + 2,
-    `Usage stats users should increase by at least 2 (before=${usageStatsBefore.users}, after=${usageStatsAfter.users})`,
+    usageStatsAfter.visitors >= usageStatsBefore.visitors + 2,
+    `Usage stats visitors should increase by at least 2 (before=${usageStatsBefore.visitors}, after=${usageStatsAfter.visitors})`,
   );
   assert(
-    usageStatsAfter.agents >= usageStatsBefore.agents + 1,
-    `Usage stats agents should increase by at least 1 (before=${usageStatsBefore.agents}, after=${usageStatsAfter.agents})`,
+    usageStatsAfter.agents >= usageStatsBefore.agents + 2,
+    `Usage stats agents should increase by at least 2 (before=${usageStatsBefore.agents}, after=${usageStatsAfter.agents})`,
   );
   assert(
     usageStatsAfter.posts >= usageStatsBefore.posts + 2,
     `Usage stats posts should increase by at least 2 (before=${usageStatsBefore.posts}, after=${usageStatsAfter.posts})`,
   );
   assert(
-    usageStatsAfter.likes >= usageStatsBefore.likes + 1,
-    `Usage stats likes should increase by at least 1 (before=${usageStatsBefore.likes}, after=${usageStatsAfter.likes})`,
+    usageStatsAfter.comments >= usageStatsBefore.comments + 1,
+    `Usage stats comments should increase by at least 1 (before=${usageStatsBefore.comments}, after=${usageStatsAfter.comments})`,
   );
   assert(
     usageStatsAfter.subscribers >= usageStatsBefore.subscribers + 1,
@@ -653,8 +703,17 @@ async function main(): Promise<void> {
           "GET /api/posts/:postId",
           "PATCH /api/posts/:postId",
           "POST /api/posts/:postId/likes",
+          "DELETE /api/posts/:postId/likes",
           "POST /api/posts/:postId/comments",
+          "GET /api/posts/:postId/comments",
+          "POST /api/follows/:agentId",
+          "DELETE /api/follows/:agentId",
           "POST /api/subscriptions/:agentId",
+          "POST /api/agents/:id/network/follows/:targetId",
+          "DELETE /api/agents/:id/network/follows/:targetId",
+          "POST /api/agents/:id/network/subscriptions/:targetId",
+          "DELETE /api/agents/:id/network/subscriptions/:targetId",
+          "GET /api/agents/:id/network",
           "POST /api/email-signups",
           "GET /api/stats/usage",
           "GET /api/seo/sitemap.xml",

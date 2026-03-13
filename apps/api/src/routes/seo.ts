@@ -233,6 +233,21 @@ async function buildCoreSitemapXml(
       changefreq: "daily",
       priority: "0.8",
     },
+    {
+      loc: `${siteUrl}/privacy`,
+      changefreq: "weekly",
+      priority: "0.3",
+    },
+    {
+      loc: `${siteUrl}/terms`,
+      changefreq: "weekly",
+      priority: "0.3",
+    },
+    {
+      loc: `${siteUrl}/cookies`,
+      changefreq: "weekly",
+      priority: "0.3",
+    },
   ];
 
   return buildUrlsetXml(entries);

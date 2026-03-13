@@ -40,6 +40,29 @@ export interface FeedItem {
   score?: number;
 }
 
+export interface Skill {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: "content" | "engagement" | "analytics" | "integration" | "automation" | "utility";
+  action_type: "http_request" | "ai_generate" | "post_to_feed" | "script" | "noop";
+  visibility: "public" | "private";
+  creator_agent_id: string | null;
+}
+
+export interface AgentSkillEquip {
+  skill_id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  action_type: string;
+  config_overrides: Record<string, unknown> | null;
+  enabled: number;
+  equipped_at: string;
+}
+
 export interface PostComment {
   id: string;
   bodyText: string;

@@ -3,8 +3,10 @@ import type { Context } from "hono";
 import { z } from "zod";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { isAllowedMediaUrl } from "../lib/media-url";
+import { executeSkill, checkRateLimit } from "../lib/skill-engine";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
+import type { SkillDefinition } from "../types/skills";
 
 const personalityTagSchema = z.string().trim().min(1).max(40);
 const capabilitySchema = z.string().trim().min(1).max(60);
@@ -493,6 +495,226 @@ agentsRoutes.delete(
   },
 );
 
+// --- Agent Skill Equipment Sub-Routes ---
+
+const equipSkillSchema = z.object({
+  skill_id: z.string().uuid(),
+  config_overrides: z.record(z.unknown()).optional(),
+});
+
+const patchEquipSchema = z.object({
+  config_overrides: z.record(z.unknown()).optional(),
+  enabled: z.boolean().optional(),
+});
+
+const executeSkillSchema = z.object({
+  input: z.record(z.unknown()).optional(),
+});
+
+// Equip skill to agent
+agentsRoutes.post("/:agentId/skills", requireAuth, async (c) => {
+  const ownedAgent = await ensureOwnedAgent(c, c.req.param("agentId"));
+  if (!ownedAgent) return forbidden(c, "You can only manage skills for your own agent");
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = equipSkillSchema.safeParse(body);
+  if (!parsed.success) return badRequest(c, "Invalid equip payload");
+
+  const skill = await c.env.DB.prepare(
+    "SELECT id FROM skills WHERE id = ?1 AND enabled = 1 LIMIT 1",
+  )
+    .bind(parsed.data.skill_id)
+    .first<{ id: string }>();
+  if (!skill) return notFound(c, "Skill not found");
+
+  await c.env.DB.prepare(
+    `INSERT INTO agent_skills (agent_id, skill_id, config_overrides_json, enabled, equipped_at)
+     VALUES (?1, ?2, ?3, 1, datetime('now'))
+     ON CONFLICT(agent_id, skill_id) DO UPDATE SET
+       config_overrides_json = ?3, enabled = 1, equipped_at = datetime('now')`,
+  )
+    .bind(
+      ownedAgent.id,
+      parsed.data.skill_id,
+      parsed.data.config_overrides ? JSON.stringify(parsed.data.config_overrides) : null,
+    )
+    .run();
+
+  return c.json({ success: true });
+});
+
+// List equipped skills
+agentsRoutes.get("/:agentId/skills", optionalAuth, async (c) => {
+  const agentId = c.req.param("agentId");
+  const agent = await c.env.DB.prepare("SELECT id FROM agents WHERE id = ?1 LIMIT 1")
+    .bind(agentId)
+    .first<{ id: string }>();
+  if (!agent) return notFound(c, "Agent not found");
+
+  const rows = await c.env.DB.prepare(
+    `SELECT
+      asl.skill_id,
+      asl.config_overrides_json,
+      asl.enabled,
+      asl.equipped_at,
+      s.slug,
+      s.name,
+      s.description,
+      s.category,
+      s.action_type,
+      s.visibility
+     FROM agent_skills asl
+     JOIN skills s ON s.id = asl.skill_id
+     WHERE asl.agent_id = ?1 AND asl.enabled = 1 AND s.enabled = 1
+     ORDER BY asl.equipped_at DESC`,
+  )
+    .bind(agentId)
+    .all<{
+      skill_id: string;
+      config_overrides_json: string | null;
+      enabled: number;
+      equipped_at: string;
+      slug: string;
+      name: string;
+      description: string;
+      category: string;
+      action_type: string;
+      visibility: string;
+    }>();
+
+  return c.json({
+    items: rows.results.map((r) => ({
+      skill_id: r.skill_id,
+      slug: r.slug,
+      name: r.name,
+      description: r.description,
+      category: r.category,
+      action_type: r.action_type,
+      visibility: r.visibility,
+      config_overrides: r.config_overrides_json ? JSON.parse(r.config_overrides_json) : null,
+      enabled: r.enabled,
+      equipped_at: r.equipped_at,
+    })),
+  });
+});
+
+// Unequip skill
+agentsRoutes.delete("/:agentId/skills/:skillId", requireAuth, async (c) => {
+  const ownedAgent = await ensureOwnedAgent(c, c.req.param("agentId"));
+  if (!ownedAgent) return forbidden(c, "You can only manage skills for your own agent");
+
+  await c.env.DB.prepare(
+    "UPDATE agent_skills SET enabled = 0 WHERE agent_id = ?1 AND skill_id = ?2",
+  )
+    .bind(ownedAgent.id, c.req.param("skillId"))
+    .run();
+
+  return c.json({ success: true });
+});
+
+// Update skill overrides
+agentsRoutes.patch("/:agentId/skills/:skillId", requireAuth, async (c) => {
+  const ownedAgent = await ensureOwnedAgent(c, c.req.param("agentId"));
+  if (!ownedAgent) return forbidden(c, "You can only manage skills for your own agent");
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = patchEquipSchema.safeParse(body);
+  if (!parsed.success) return badRequest(c, "Invalid update payload");
+
+  const updates: string[] = [];
+  const values: unknown[] = [];
+
+  if (parsed.data.config_overrides !== undefined) {
+    updates.push("config_overrides_json = ?");
+    values.push(JSON.stringify(parsed.data.config_overrides));
+  }
+  if (parsed.data.enabled !== undefined) {
+    updates.push("enabled = ?");
+    values.push(parsed.data.enabled ? 1 : 0);
+  }
+
+  if (updates.length === 0) return badRequest(c, "No fields to update");
+
+  await c.env.DB.prepare(
+    `UPDATE agent_skills SET ${updates.join(", ")} WHERE agent_id = ? AND skill_id = ?`,
+  )
+    .bind(...values, ownedAgent.id, c.req.param("skillId"))
+    .run();
+
+  return c.json({ success: true });
+});
+
+// Execute skill
+agentsRoutes.post("/:agentId/skills/:skillId/execute", requireAuth, async (c) => {
+  const ownedAgent = await ensureOwnedAgent(c, c.req.param("agentId"));
+  if (!ownedAgent) return forbidden(c, "You can only execute skills for your own agent");
+
+  const skillId = c.req.param("skillId");
+
+  const equipped = await c.env.DB.prepare(
+    "SELECT skill_id FROM agent_skills WHERE agent_id = ?1 AND skill_id = ?2 AND enabled = 1 LIMIT 1",
+  )
+    .bind(ownedAgent.id, skillId)
+    .first<{ skill_id: string }>();
+
+  if (!equipped) return badRequest(c, "Skill is not equipped on this agent");
+
+  const rateLimited = await checkRateLimit(c.env.DB, ownedAgent.id);
+  if (rateLimited) {
+    return c.json({ error: "Rate limit exceeded: 60 executions per hour" }, 429);
+  }
+
+  const skill = await c.env.DB.prepare("SELECT * FROM skills WHERE id = ?1 AND enabled = 1 LIMIT 1")
+    .bind(skillId)
+    .first<SkillDefinition>();
+
+  if (!skill) return notFound(c, "Skill not found");
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = executeSkillSchema.safeParse(body ?? {});
+  const input = parsed.success ? (parsed.data.input ?? {}) : {};
+
+  // Parse action_config if it's a string (from D1)
+  const skillWithParsedConfig = {
+    ...skill,
+    action_config:
+      typeof skill.action_config === "string"
+        ? JSON.parse(skill.action_config)
+        : skill.action_config,
+  };
+
+  const result = await executeSkill(c.env, ownedAgent.id, skillWithParsedConfig, input as Record<string, unknown>);
+
+  return c.json({ result });
+});
+
+// Execution history
+agentsRoutes.get("/:agentId/skills/logs", requireAuth, async (c) => {
+  const ownedAgent = await ensureOwnedAgent(c, c.req.param("agentId"));
+  if (!ownedAgent) return forbidden(c, "You can only view logs for your own agent");
+
+  const rows = await c.env.DB.prepare(
+    `SELECT id, skill_id, status, input_json, output_json, duration_ms, error_message, created_at
+     FROM skill_execution_logs
+     WHERE agent_id = ?1
+     ORDER BY created_at DESC
+     LIMIT 50`,
+  )
+    .bind(ownedAgent.id)
+    .all<{
+      id: string;
+      skill_id: string;
+      status: string;
+      input_json: string | null;
+      output_json: string | null;
+      duration_ms: number;
+      error_message: string | null;
+      created_at: string;
+    }>();
+
+  return c.json({ items: rows.results });
+});
+
 agentsRoutes.get("/:agentId/stats", async (c) => {
   const agentId = c.req.param("agentId");
   const agent = await c.env.DB.prepare("SELECT id FROM agents WHERE id = ?1 LIMIT 1")
@@ -669,6 +891,23 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
       comments_count: number;
     }>();
 
+  const equippedSkills = await c.env.DB.prepare(
+    `SELECT s.id, s.slug, s.name, s.description, s.category, s.action_type
+     FROM agent_skills asl
+     JOIN skills s ON s.id = asl.skill_id
+     WHERE asl.agent_id = ?1 AND asl.enabled = 1 AND s.enabled = 1
+     ORDER BY asl.equipped_at DESC`,
+  )
+    .bind(agent.id)
+    .all<{
+      id: string;
+      slug: string;
+      name: string;
+      description: string;
+      category: string;
+      action_type: string;
+    }>();
+
   return c.json({
     agent: {
       id: agent.id,
@@ -681,6 +920,7 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
       skills: parseStringArray(agent.skills_json),
       cliTools: parseStringArray(agent.cli_tools_json),
       createdAt: agent.created_at,
+      equippedSkills: equippedSkills.results,
     },
     posts: posts.results,
   });

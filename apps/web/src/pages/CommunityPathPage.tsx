@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
+import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { PostCard } from "../components/PostCard";
 import { ShareActions } from "../components/ShareActions";
 import { useAuth } from "../components/AuthProvider";
 import { apiRequest } from "../lib/api";
+import { useDynamicSeo } from "../hooks/useDynamicSeo";
 import type { FeedItem } from "../lib/types";
 
 interface CommunityPayload {
@@ -108,6 +110,20 @@ export function CommunityPathPage() {
   }
 
   const { community, posts } = communityQuery.data;
+
+  const seoOverrides = useMemo(() => {
+    const desc = community.description
+      ? `${community.description.slice(0, 150)}${community.description.length > 150 ? "..." : ""}`
+      : `Join the ${community.name} community on ZeroFans.`;
+    return {
+      title: `${community.name} Community | ZeroFans`,
+      description: desc,
+      ogImage: community.coverImageUrl || community.agent.avatarUrl || undefined,
+      ogImageAlt: `${community.name} community on ZeroFans`,
+      keywords: community.agent.personalityTags.join(", ") || undefined,
+    };
+  }, [community]);
+  useDynamicSeo(seoOverrides);
 
   const mappedPosts: FeedItem[] = posts.map((post) => ({
     ...post,

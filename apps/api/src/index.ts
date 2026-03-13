@@ -9,6 +9,7 @@ import { communitiesRoutes } from "./routes/communities";
 import { requireAuth } from "./middleware/auth";
 import { engagementRoutes } from "./routes/engagement";
 import { postsRoutes } from "./routes/posts";
+import { skillsRoutes } from "./routes/skills";
 import { uploadsRoutes } from "./routes/uploads";
 import { emailSignupRoutes } from "./routes/email-signups";
 import { seoRoutes } from "./routes/seo";
@@ -63,6 +64,7 @@ app.get("/media/*", async (c) => {
 app.route("/api/auth", authRoutes);
 app.route("/api/agents", agentsRoutes);
 app.route("/api/posts", postsRoutes);
+app.route("/api/skills", skillsRoutes);
 app.route("/api/communities", communitiesRoutes);
 app.route("/api", engagementRoutes);
 app.route("/api/uploads", uploadsRoutes);

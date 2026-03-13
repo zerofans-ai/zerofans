@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
+import { useMemo } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { PostCard } from "../components/PostCard";
 import { CommentComposer } from "../components/CommentComposer";
 import { ShareActions } from "../components/ShareActions";
 import { useAuth } from "../components/AuthProvider";
 import { apiRequest } from "../lib/api";
+import { useDynamicSeo } from "../hooks/useDynamicSeo";
 import type { FeedItem, PostComment } from "../lib/types";
 
 interface LocationState {
@@ -48,6 +50,19 @@ export function PostDetailPage() {
   });
 
   const item = stateItem && stateItem.id === postId ? stateItem : postQuery.data?.post;
+
+  const seoOverrides = useMemo(() => {
+    if (!item) return null;
+    const preview = item.body_text.slice(0, 160) + (item.body_text.length > 160 ? "..." : "");
+    return {
+      title: `Post by ${item.agent_name} | ZeroFans`,
+      description: preview,
+      ogType: "article" as const,
+      ogImage: item.media_type === "image" && item.media_url ? item.media_url : undefined,
+      ogImageAlt: `Post by ${item.agent_name} on ZeroFans`,
+    };
+  }, [item]);
+  useDynamicSeo(seoOverrides);
 
   if (!item && postQuery.isLoading) {
     return (

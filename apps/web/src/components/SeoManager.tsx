@@ -1,7 +1,8 @@
 import { useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import { SEO_SOCIAL_IMAGE_PATH, SITE_BASE_URL, ZEROCLAWLABS_URL } from "../lib/config";
-import { DEFAULT_DESCRIPTION, SEO_KEYWORDS, resolveSeo } from "../lib/seo";
+import { DEFAULT_DESCRIPTION, SEO_KEYWORDS, resolveSeo, overrideSeo } from "../lib/seo";
+import type { SeoPayload } from "../lib/seo";
 
 function upsertMeta(
   selector: string,
@@ -53,18 +54,28 @@ function upsertJsonLd(id: string, payload: unknown): void {
   }
 }
 
-export function SeoManager() {
+interface SeoManagerProps {
+  overrides?: Partial<SeoPayload>;
+}
+
+export function SeoManager({ overrides }: SeoManagerProps = {}) {
   const location = useLocation();
-  const seo = useMemo(() => resolveSeo(location.pathname), [location.pathname]);
+  const seo = useMemo(() => {
+    const base = resolveSeo(location.pathname);
+    return overrides ? overrideSeo(base, overrides) : base;
+  }, [location.pathname, overrides]);
 
   useEffect(() => {
     const canonicalUrl = new URL(seo.canonicalPath, `${SITE_BASE_URL}/`).toString();
-    const socialImageUrl = new URL(SEO_SOCIAL_IMAGE_PATH, `${SITE_BASE_URL}/`).toString();
+    const defaultSocialImageUrl = new URL(SEO_SOCIAL_IMAGE_PATH, `${SITE_BASE_URL}/`).toString();
+    const socialImageUrl = seo.ogImage || defaultSocialImageUrl;
+    const imageAlt = seo.ogImageAlt || "ZeroFans social graph by ZeroClaw Labs";
+    const keywords = seo.keywords ? `${seo.keywords}, ${SEO_KEYWORDS}` : SEO_KEYWORDS;
 
     document.title = seo.title;
 
     upsertMeta('meta[name="description"]', { name: "description" }, seo.description);
-    upsertMeta('meta[name="keywords"]', { name: "keywords" }, SEO_KEYWORDS);
+    upsertMeta('meta[name="keywords"]', { name: "keywords" }, keywords);
     upsertMeta('meta[name="robots"]', { name: "robots" }, seo.robots);
     upsertMeta('meta[name="author"]', { name: "author" }, "ZeroClaw Labs");
     upsertMeta(
@@ -82,7 +93,7 @@ export function SeoManager() {
     upsertMeta(
       'meta[name="twitter:image:alt"]',
       { name: "twitter:image:alt" },
-      "ZeroFans social graph by ZeroClaw Labs",
+      imageAlt,
     );
 
     upsertMeta('meta[property="og:title"]', { property: "og:title" }, seo.title);
@@ -105,7 +116,7 @@ export function SeoManager() {
     upsertMeta(
       'meta[property="og:image:alt"]',
       { property: "og:image:alt" },
-      "ZeroFans social graph by ZeroClaw Labs",
+      imageAlt,
     );
     upsertMeta('meta[property="og:site_name"]', { property: "og:site_name" }, "ZeroFans");
     upsertMeta('meta[property="og:locale"]', { property: "og:locale" }, "en_US");

@@ -89,6 +89,9 @@ async function main(): Promise<void> {
   assertIncludes(sitemapXml, "<urlset", "sitemap.xml");
   assertIncludes(sitemapXml, "https://zero-fans.com/", "sitemap.xml");
   assertIncludes(sitemapXml, "https://zero-fans.com/community", "sitemap.xml");
+  assertIncludes(sitemapXml, "https://zero-fans.com/privacy", "sitemap.xml");
+  assertIncludes(sitemapXml, "https://zero-fans.com/terms", "sitemap.xml");
+  assertIncludes(sitemapXml, "https://zero-fans.com/cookies", "sitemap.xml");
 
   const home = resolveSeo("/");
   assert(home.title.includes("Feed"), "resolveSeo(/) should target feed intent");
@@ -121,6 +124,25 @@ async function main(): Promise<void> {
   const studio = resolveSeo("/studio");
   assert(studio.robots === "noindex,nofollow", "resolveSeo(/studio) should be noindex");
 
+  const privacy = resolveSeo("/privacy");
+  assert(
+    privacy.title === "Privacy Policy | ZeroFans",
+    "resolveSeo(/privacy) title mismatch",
+  );
+  assert(privacy.robots.startsWith("index,follow"), "resolveSeo(/privacy) should be indexable");
+
+  const terms = resolveSeo("/terms");
+  assert(
+    terms.title === "Terms of Service | ZeroFans",
+    "resolveSeo(/terms) title mismatch",
+  );
+
+  const cookies = resolveSeo("/cookies");
+  assert(
+    cookies.title === "Cookie Notice | ZeroFans",
+    "resolveSeo(/cookies) title mismatch",
+  );
+
   const fallback = resolveSeo("/not-a-real-route");
   assert(
     fallback.title === DEFAULT_TITLE,
@@ -143,6 +165,9 @@ async function main(): Promise<void> {
           "/community/:path",
           "/agents/:slug",
           "/posts/:postId",
+          "/privacy",
+          "/terms",
+          "/cookies",
           "/auth",
           "/studio",
         ],

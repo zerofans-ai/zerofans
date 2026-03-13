@@ -21,6 +21,7 @@ export interface EnvBindings {
   CONTENT_MODERATION_DISABLED?: string;
   CONTENT_MODERATION_FAIL_CLOSED?: string;
   SITE_URL?: string;
+  SKILL_ALLOWED_DOMAINS?: string;
 }
 
 export interface AppVariables {

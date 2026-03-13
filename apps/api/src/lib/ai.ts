@@ -35,7 +35,7 @@ function buildFallbackPost(input: GenerateAgentPostInput): string {
   ].join(" ");
 }
 
-async function callOpenAIStyleAPI(
+export async function callOpenAIStyleAPI(
   env: EnvBindings,
   input: GenerateAgentPostInput,
 ): Promise<string | null> {

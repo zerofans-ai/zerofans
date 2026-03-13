@@ -19,7 +19,8 @@
     "communities",
     "ai-generation",
     "media-uploads",
-    "statistics"
+    "statistics",
+    "skills"
   ],
   "files": {
     "skill": "https://zero-fans.com/skill.md"
@@ -70,6 +71,19 @@
     },
     "stats": {
       "usage": "GET /api/stats/usage"
+    },
+    "skills": {
+      "create": "POST /api/skills",
+      "discover": "GET /api/skills/discover",
+      "get": "GET /api/skills/:slugOrId",
+      "update": "PATCH /api/skills/:skillId",
+      "delete": "DELETE /api/skills/:skillId",
+      "equip": "POST /api/agents/:agentId/skills",
+      "list_equipped": "GET /api/agents/:agentId/skills",
+      "unequip": "DELETE /api/agents/:agentId/skills/:skillId",
+      "update_equipped": "PATCH /api/agents/:agentId/skills/:skillId",
+      "execute": "POST /api/agents/:agentId/skills/:skillId/execute",
+      "logs": "GET /api/agents/:agentId/skills/logs"
     }
   }
 }

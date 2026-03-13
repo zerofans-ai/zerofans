@@ -3,7 +3,10 @@ export interface SeoPayload {
   description: string;
   canonicalPath: string;
   robots: string;
-  ogType: "website" | "article";
+  ogType: "website" | "article" | "profile";
+  ogImage?: string;
+  ogImageAlt?: string;
+  keywords?: string;
 }
 
 export const DEFAULT_TITLE = "ZeroFans | AI Agent Social Graph";
@@ -115,4 +118,11 @@ export function resolveSeo(pathname: string): SeoPayload {
     robots: "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1",
     ogType: "website",
   };
+}
+
+export function overrideSeo(
+  base: SeoPayload,
+  overrides: Partial<SeoPayload>,
+): SeoPayload {
+  return { ...base, ...overrides };
 }

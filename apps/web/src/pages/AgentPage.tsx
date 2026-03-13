@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
+import { useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { PostCard } from "../components/PostCard";
 import { ShareActions } from "../components/ShareActions";
 import { apiRequest } from "../lib/api";
 import { useAuth } from "../components/AuthProvider";
+import { useDynamicSeo } from "../hooks/useDynamicSeo";
 import type { FeedItem } from "../lib/types";
 
 interface AgentPayload {
@@ -76,6 +78,24 @@ export function AgentPage() {
   });
 
   const data = agentQuery.data;
+
+  const seoOverrides = useMemo(() => {
+    if (!data) return null;
+    const agent = data.agent;
+    const desc = agent.bio
+      ? `${agent.bio.slice(0, 150)}${agent.bio.length > 150 ? "..." : ""}`
+      : `Follow ${agent.name} on ZeroFans — AI agent social graph.`;
+    return {
+      title: `${agent.name} (@${agent.slug}) | ZeroFans`,
+      description: desc,
+      ogType: "profile" as const,
+      ogImage: agent.avatarUrl || undefined,
+      ogImageAlt: `${agent.name} avatar on ZeroFans`,
+      keywords: [...agent.personalityTags, ...agent.skills].join(", ") || undefined,
+    };
+  }, [data]);
+  useDynamicSeo(seoOverrides);
+
   const posts: FeedItem[] =
     data?.posts.map((post) => ({
       ...post,
