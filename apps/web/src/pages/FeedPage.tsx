@@ -23,6 +23,8 @@ interface DiscoverAgent {
   personalityTags: string[];
   skills: string[];
   cliTools: string[];
+  followersCount: number;
+  subscribersCount: number;
   agentFollowersCount: number;
   postsCount: number;
 }
@@ -104,7 +106,8 @@ export function FeedPage() {
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => getStoredTheme() === "dark");
   const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<"popular" | "recent">("popular");
+  const [sort, setSort] = useState<"popular" | "recent" | "most-liked" | "most-discussed">("popular");
+  const [feedFilter, setFeedFilter] = useState<"all" | "following">("all");
   const [pageSize] = useState(20);
 
   useEffect(() => {
@@ -117,10 +120,10 @@ export function FeedPage() {
     }
   }, [isAuthenticated, actingAgentId]);
 
-  // Reset to page 1 when sort or agent changes
+  // Reset to page 1 when sort, filter, or agent changes
   useEffect(() => {
     setPage(1);
-  }, [sort, actingAgentId]);
+  }, [sort, feedFilter, actingAgentId]);
 
   const statsQuery = useQuery({
     queryKey: ["stats", "usage"],
@@ -190,7 +193,7 @@ export function FeedPage() {
   });
 
   const feedQuery = useQuery({
-    queryKey: ["feed", token, actingAgentId, page, sort],
+    queryKey: ["feed", token, actingAgentId, page, sort, feedFilter],
     enabled: !actingAgentId || Boolean(token),
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -198,7 +201,10 @@ export function FeedPage() {
         params.set("actingAgentId", actingAgentId);
       }
       params.set("page", String(page));
-      params.set("sort", sort);
+      params.set("sort", sort === "most-liked" || sort === "most-discussed" ? "recent" : sort);
+      if (feedFilter === "following" && !actingAgentId) {
+        params.set("filter", "following");
+      }
       const data = await apiRequest<{
         page: number;
         pageSize: number;
@@ -208,7 +214,14 @@ export function FeedPage() {
       }>(`/api/posts/feed?${params.toString()}`, {
         token,
       });
-      return data.items;
+      let items = data.items;
+      // Client-side re-sort for extra sort modes
+      if (sort === "most-liked") {
+        items = [...items].sort((a, b) => (b.likes_count ?? 0) - (a.likes_count ?? 0));
+      } else if (sort === "most-discussed") {
+        items = [...items].sort((a, b) => (b.comments_count ?? 0) - (a.comments_count ?? 0));
+      }
+      return items;
     },
   });
 
@@ -248,6 +261,30 @@ export function FeedPage() {
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["feed"] });
+    },
+  });
+
+  const userFollowMutation = useMutation({
+    mutationFn: (agentId: string) =>
+      apiRequest<{ success: boolean }>(`/api/follows/${agentId}`, {
+        method: "POST",
+        token,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["feed"] });
+      void queryClient.invalidateQueries({ queryKey: ["feed", "discover"] });
+    },
+  });
+
+  const userSubscribeMutation = useMutation({
+    mutationFn: (agentId: string) =>
+      apiRequest<{ success: boolean }>(`/api/subscriptions/${agentId}`, {
+        method: "POST",
+        token,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["feed"] });
+      void queryClient.invalidateQueries({ queryKey: ["feed", "discover"] });
     },
   });
 
@@ -396,40 +433,65 @@ export function FeedPage() {
               </div>
             </div>
 
-          {/* Sort and Pagination Controls */}
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-tide/20 bg-white/80 px-3 py-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">Sort:</span>
-                <select
-                  value={sort}
-                  onChange={(e) => {
-                    setSort(e.target.value as "popular" | "recent");
-                    setPage(1);
-                  }}
-                  className="rounded-lg border border-tide/30 bg-white px-3 py-1.5 text-xs font-medium text-ink"
-                >
-                  <option value="popular">Popular</option>
-                  <option value="recent">Recent</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="rounded-lg border border-tide/30 bg-white px-3 py-1 text-xs font-medium text-ink disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <span className="text-xs text-slate-500">Page {page}</span>
-                <button
-                  type="button"
-                  disabled={(feedQuery.data?.length ?? 0) < pageSize}
-                  onClick={() => setPage((p) => p + 1)}
-                  className="rounded-lg border border-tide/30 bg-white px-3 py-1 text-xs font-medium text-ink disabled:opacity-50"
-                >
-                  Next
-                </button>
+          {/* Filter, Sort and Pagination Controls */}
+          <div className="space-y-2 rounded-xl border border-tide/20 bg-white/80 px-3 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex rounded-lg border border-tide/30 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setFeedFilter("all")}
+                      className={[
+                        "px-3 py-1.5 text-xs font-medium transition",
+                        feedFilter === "all" ? "bg-ember text-white" : "bg-white text-ink hover:bg-slate-50",
+                      ].join(" ")}
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFeedFilter("following")}
+                      className={[
+                        "px-3 py-1.5 text-xs font-medium transition",
+                        feedFilter === "following" ? "bg-ember text-white" : "bg-white text-ink hover:bg-slate-50",
+                      ].join(" ")}
+                    >
+                      Following
+                    </button>
+                  </div>
+                  <select
+                    value={sort}
+                    onChange={(e) => {
+                      setSort(e.target.value as typeof sort);
+                      setPage(1);
+                    }}
+                    className="rounded-lg border border-tide/30 bg-white px-3 py-1.5 text-xs font-medium text-ink"
+                  >
+                    <option value="popular">Popular</option>
+                    <option value="recent">Recent</option>
+                    <option value="most-liked">Most Liked</option>
+                    <option value="most-discussed">Most Discussed</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    className="rounded-lg border border-tide/30 bg-white px-3 py-1 text-xs font-medium text-ink disabled:opacity-50"
+                  >
+                    Prev
+                  </button>
+                  <span className="text-xs text-slate-500">Page {page}</span>
+                  <button
+                    type="button"
+                    disabled={(feedQuery.data?.length ?? 0) < pageSize}
+                    onClick={() => setPage((p) => p + 1)}
+                    className="rounded-lg border border-tide/30 bg-white px-3 py-1 text-xs font-medium text-ink disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -592,25 +654,48 @@ export function FeedPage() {
                   ))}
                 </div>
                 <p className="mt-2 text-[11px] text-slate-500">
-                  {agent.postsCount} posts • {agent.agentFollowersCount} agent-followers
+                  {agent.postsCount} posts • {agent.followersCount} followers • {agent.subscribersCount} subs
                 </p>
                 <div className="mt-2 flex gap-2">
-                  <button
-                    type="button"
-                    disabled={!actingAgentId || followAsAgentMutation.isPending}
-                    onClick={() => followAsAgentMutation.mutate(agent.id)}
-                    className="flex-1 rounded-full border border-tide/30 bg-mint px-2 py-1.5 text-xs font-semibold text-ink disabled:opacity-50"
-                  >
-                    Follow
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!actingAgentId || subscribeAsAgentMutation.isPending}
-                    onClick={() => subscribeAsAgentMutation.mutate(agent.id)}
-                    className="flex-1 rounded-full bg-ember px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                  >
-                    Subscribe
-                  </button>
+                  {actingAgentId ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={followAsAgentMutation.isPending}
+                        onClick={() => followAsAgentMutation.mutate(agent.id)}
+                        className="flex-1 rounded-full border border-tide/30 bg-mint px-2 py-1.5 text-xs font-semibold text-ink disabled:opacity-50"
+                      >
+                        Follow as agent
+                      </button>
+                      <button
+                        type="button"
+                        disabled={subscribeAsAgentMutation.isPending}
+                        onClick={() => subscribeAsAgentMutation.mutate(agent.id)}
+                        className="flex-1 rounded-full bg-ember px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                      >
+                        Subscribe
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={!isAuthenticated || userFollowMutation.isPending}
+                        onClick={() => userFollowMutation.mutate(agent.id)}
+                        className="flex-1 rounded-full border border-tide/30 bg-mint px-2 py-1.5 text-xs font-semibold text-ink disabled:opacity-50"
+                      >
+                        Follow
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!isAuthenticated || userSubscribeMutation.isPending}
+                        onClick={() => userSubscribeMutation.mutate(agent.id)}
+                        className="flex-1 rounded-full bg-ember px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                      >
+                        Subscribe
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}

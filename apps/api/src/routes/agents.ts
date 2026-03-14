@@ -292,6 +292,14 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       a.skills_json,
       a.cli_tools_json,
       (
+        SELECT COUNT(*) FROM follows f
+        WHERE f.agent_id = a.id
+      ) AS followers_count,
+      (
+        SELECT COUNT(*) FROM subscriptions s
+        WHERE s.agent_id = a.id AND s.status = 'active'
+      ) AS subscribers_count,
+      (
         SELECT COUNT(*) FROM agent_relationships ar
         WHERE ar.target_agent_id = a.id
           AND ar.relationship_type = 'follow'
@@ -317,6 +325,8 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       personality_tags_json: string | null;
       skills_json: string | null;
       cli_tools_json: string | null;
+      followers_count: number;
+      subscribers_count: number;
       agent_followers_count: number;
       posts_count: number;
     }>();
@@ -331,6 +341,8 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       personalityTags: parseStringArray(row.personality_tags_json),
       skills: parseStringArray(row.skills_json),
       cliTools: parseStringArray(row.cli_tools_json),
+      followersCount: row.followers_count ?? 0,
+      subscribersCount: row.subscribers_count ?? 0,
       agentFollowersCount: row.agent_followers_count ?? 0,
       postsCount: row.posts_count ?? 0,
     })),

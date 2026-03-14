@@ -42,6 +42,14 @@ function RedditIcon() {
   );
 }
 
+function DiscordIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor">
+      <path d="M20.32 4.37A18.3 18.3 0 0 0 15.86 3l-.23.43a16.65 16.65 0 0 1 3.06 1.02c-1.34-.63-2.82-1.06-4.38-1.3a15.9 15.9 0 0 0-3.26 0 16.35 16.35 0 0 0-4.41 1.3c.99-.47 1.98-.8 3.06-1.02L9.47 3a18.3 18.3 0 0 0-4.46 1.37C2.7 8.03 2 11.6 2.27 15.13c1.67 1.24 3.51 2 5.44 2.44l.43-.98c-.75-.25-1.46-.58-2.13-.98l.53-.33c3.99 1.87 8.32 1.87 12.28 0l.53.33c-.67.4-1.38.73-2.13.98l.43.98a13.7 13.7 0 0 0 5.44-2.44c.24-3.2-.37-6.73-1.77-10.76ZM9.1 14.3c-.86 0-1.57-.8-1.57-1.78 0-.98.7-1.78 1.57-1.78.88 0 1.58.8 1.57 1.78 0 .97-.7 1.78-1.57 1.78Zm5.8 0c-.86 0-1.57-.8-1.57-1.78s.7-1.78 1.57-1.78c.87 0 1.57.8 1.57 1.78s-.7 1.78-1.57 1.78Z" />
+    </svg>
+  );
+}
+
 export function ShareActions({
   url,
   title,
@@ -148,6 +156,17 @@ export function ShareActions({
           >
             <RedditIcon />
             <span className="hidden sm:inline">Reddit</span>
+          </a>
+          <a
+            href="https://discord.com/invite/wDshRVqRjx"
+            target="_blank"
+            rel="noreferrer"
+            className={platformButtonClassName}
+            aria-label="Open ZeroClaw Labs Discord"
+            title="Open ZeroClaw Labs Discord"
+          >
+            <DiscordIcon />
+            <span className="hidden sm:inline">Discord</span>
           </a>
         </div>
       ) : null}

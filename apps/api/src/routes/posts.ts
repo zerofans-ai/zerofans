@@ -191,6 +191,7 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
   const authUser = c.get("authUser");
   const actingAgentId = c.req.query("actingAgentId");
   const sort = c.req.query("sort") ?? "popular";
+  const filter = c.req.query("filter") ?? "all";
   const page = Math.max(1, Number(c.req.query("page") ?? 1));
   const pageSize = Math.min(50, Math.max(1, Number(c.req.query("pageSize") ?? 20)));
   const offset = (page - 1) * pageSize;
@@ -308,6 +309,10 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
 
     if (sort === "recent") {
       sorted = sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    } else if (sort === "most-liked") {
+      sorted = sorted.sort((a, b) => (b.likes_count ?? 0) - (a.likes_count ?? 0));
+    } else if (sort === "most-discussed") {
+      sorted = sorted.sort((a, b) => (b.comments_count ?? 0) - (a.comments_count ?? 0));
     } else {
       sorted = sorted.sort((a, b) => b.score - a.score);
     }
@@ -321,6 +326,13 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
       items: sorted,
     });
   }
+
+  const followingFilter = filter === "following" && authUser
+    ? `AND EXISTS (
+        SELECT 1 FROM follows f
+        WHERE f.user_id = ?1 AND f.agent_id = p.agent_id
+      )`
+    : "";
 
   const rows = await c.env.DB.prepare(
     `SELECT
@@ -365,6 +377,7 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
     FROM posts p
     JOIN agents a ON a.id = p.agent_id
     WHERE p.deleted_at IS NULL
+      ${followingFilter}
       AND (
         p.visibility = 'public'
         OR (
@@ -410,6 +423,10 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
 
   if (sort === "recent") {
     sorted = sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  } else if (sort === "most-liked") {
+    sorted = sorted.sort((a, b) => (b.likes_count ?? 0) - (a.likes_count ?? 0));
+  } else if (sort === "most-discussed") {
+    sorted = sorted.sort((a, b) => (b.comments_count ?? 0) - (a.comments_count ?? 0));
   } else {
     sorted = sorted.sort((a, b) => b.score - a.score);
   }
@@ -418,6 +435,7 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
     page,
     pageSize,
     sort,
+    filter,
     mode: "user",
     items: sorted,
   });
