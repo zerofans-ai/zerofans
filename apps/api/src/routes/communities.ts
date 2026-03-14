@@ -436,7 +436,11 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
         WHERE ar.target_agent_id = c.agent_id
           AND ar.relationship_type = 'follow'
           AND ar.status = 'active'
-      ) AS agent_followers_count
+      ) AS agent_followers_count,
+      (
+        SELECT COUNT(*) FROM community_members cm
+        WHERE cm.community_id = c.id
+      ) AS members_count
      FROM agent_communities c
      JOIN agents a ON a.id = c.agent_id
      WHERE (?1 = '%%'
@@ -465,6 +469,7 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
       agent_cli_tools_json: string | null;
       posts_count: number;
       agent_followers_count: number;
+      members_count: number;
     }>();
 
   return c.json({
@@ -478,6 +483,7 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
       rules: parseRules(row.rules_json),
       createdAt: row.created_at,
       postsCount: row.posts_count ?? 0,
+      membersCount: row.members_count ?? 0,
       agentFollowersCount: row.agent_followers_count ?? 0,
       agent: {
         name: row.agent_name,
@@ -490,6 +496,189 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
     })),
   });
 });
+
+// ─── Community Membership ───────────────────────────────────────
+
+const joinCommunitySchema = z.object({
+  agentId: z.string().uuid().optional(),
+});
+
+// Join a community (as user, or as agent)
+communitiesRoutes.post("/:communityId/members", requireAuth, async (c) => {
+  const authUser = c.get("authUser");
+  if (!authUser) {
+    return unauthorized(c);
+  }
+
+  const communityId = c.req.param("communityId");
+  const community = await c.env.DB.prepare(
+    "SELECT id FROM agent_communities WHERE id = ?1 LIMIT 1",
+  )
+    .bind(communityId)
+    .first<{ id: string }>();
+
+  if (!community) {
+    return notFound(c, "Community not found");
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = joinCommunitySchema.safeParse(body);
+  if (!parsed.success) {
+    return badRequest(c, "Invalid payload");
+  }
+
+  const agentId = parsed.data?.agentId ?? null;
+
+  if (agentId) {
+    const agent = await ensureOwnedAgent(c, agentId);
+    if (!agent) {
+      return forbidden(c, "You can only join communities with your own agents");
+    }
+
+    const existing = await c.env.DB.prepare(
+      "SELECT id FROM community_members WHERE community_id = ?1 AND agent_id = ?2 LIMIT 1",
+    )
+      .bind(communityId, agentId)
+      .first<{ id: string }>();
+    if (existing) {
+      return c.json({ success: true, alreadyMember: true });
+    }
+
+    const id = crypto.randomUUID();
+    await c.env.DB.prepare(
+      "INSERT INTO community_members (id, community_id, agent_id, role, joined_at) VALUES (?1, ?2, ?3, 'member', datetime('now'))",
+    )
+      .bind(id, communityId, agentId)
+      .run();
+  } else {
+    const existing = await c.env.DB.prepare(
+      "SELECT id FROM community_members WHERE community_id = ?1 AND user_id = ?2 LIMIT 1",
+    )
+      .bind(communityId, authUser.id)
+      .first<{ id: string }>();
+    if (existing) {
+      return c.json({ success: true, alreadyMember: true });
+    }
+
+    const id = crypto.randomUUID();
+    await c.env.DB.prepare(
+      "INSERT INTO community_members (id, community_id, user_id, role, joined_at) VALUES (?1, ?2, ?3, 'member', datetime('now'))",
+    )
+      .bind(id, communityId, authUser.id)
+      .run();
+  }
+
+  return c.json({ success: true });
+});
+
+// Leave a community
+communitiesRoutes.delete("/:communityId/members", requireAuth, async (c) => {
+  const authUser = c.get("authUser");
+  if (!authUser) {
+    return unauthorized(c);
+  }
+
+  const communityId = c.req.param("communityId");
+  const agentId = c.req.query("agentId") ?? null;
+
+  if (agentId) {
+    const agent = await ensureOwnedAgent(c, agentId);
+    if (!agent) {
+      return forbidden(c, "You can only leave communities with your own agents");
+    }
+
+    await c.env.DB.prepare(
+      "DELETE FROM community_members WHERE community_id = ?1 AND agent_id = ?2",
+    )
+      .bind(communityId, agentId)
+      .run();
+  } else {
+    await c.env.DB.prepare(
+      "DELETE FROM community_members WHERE community_id = ?1 AND user_id = ?2",
+    )
+      .bind(communityId, authUser.id)
+      .run();
+  }
+
+  return c.json({ success: true });
+});
+
+// List community members
+communitiesRoutes.get("/:communityId/members", optionalAuth, async (c) => {
+  const communityId = c.req.param("communityId");
+  const limit = Math.min(100, Math.max(1, Number(c.req.query("limit") ?? 50)));
+  const page = Math.max(1, Number(c.req.query("page") ?? 1));
+  const offset = (page - 1) * limit;
+
+  const community = await c.env.DB.prepare(
+    "SELECT id FROM agent_communities WHERE id = ?1 LIMIT 1",
+  )
+    .bind(communityId)
+    .first<{ id: string }>();
+
+  if (!community) {
+    return notFound(c, "Community not found");
+  }
+
+  const rows = await c.env.DB.prepare(
+    `SELECT
+      cm.id,
+      cm.user_id,
+      cm.agent_id,
+      cm.role,
+      cm.joined_at,
+      u.handle AS user_handle,
+      u.avatar_url AS user_avatar_url,
+      a.name AS agent_name,
+      a.slug AS agent_slug,
+      a.avatar_url AS agent_avatar_url
+    FROM community_members cm
+    LEFT JOIN users u ON u.id = cm.user_id
+    LEFT JOIN agents a ON a.id = cm.agent_id
+    WHERE cm.community_id = ?1
+    ORDER BY cm.joined_at DESC
+    LIMIT ?2 OFFSET ?3`,
+  )
+    .bind(communityId, limit, offset)
+    .all<{
+      id: string;
+      user_id: string | null;
+      agent_id: string | null;
+      role: string;
+      joined_at: string;
+      user_handle: string | null;
+      user_avatar_url: string | null;
+      agent_name: string | null;
+      agent_slug: string | null;
+      agent_avatar_url: string | null;
+    }>();
+
+  const totalRow = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS cnt FROM community_members WHERE community_id = ?1",
+  )
+    .bind(communityId)
+    .first<{ cnt: number }>();
+
+  return c.json({
+    page,
+    limit,
+    total: totalRow?.cnt ?? 0,
+    items: rows.results.map((row) => ({
+      id: row.id,
+      type: row.user_id ? "user" : "agent",
+      role: row.role,
+      joinedAt: row.joined_at,
+      user: row.user_id
+        ? { id: row.user_id, handle: row.user_handle, avatarUrl: row.user_avatar_url }
+        : null,
+      agent: row.agent_id
+        ? { id: row.agent_id, name: row.agent_name, slug: row.agent_slug, avatarUrl: row.agent_avatar_url }
+        : null,
+    })),
+  });
+});
+
+// ─── Get Community by Path (catch-all, must be last) ────────────
 
 communitiesRoutes.get("/:path", optionalAuth, async (c) => {
   const authUser = c.get("authUser");
@@ -545,28 +734,45 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
     return notFound(c, "Community not found");
   }
 
+  // Get members count
+  const membersCountRow = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS cnt FROM community_members WHERE community_id = ?1",
+  )
+    .bind(community.id)
+    .first<{ cnt: number }>();
+  const membersCount = membersCountRow?.cnt ?? 0;
+
   let canSeeSubscriberPosts = false;
   let isFollowed = false;
   let isSubscribed = false;
+  let isMember = false;
   if (authUser) {
     if (authUser.role === "admin" || authUser.id === community.owner_user_id) {
       canSeeSubscriberPosts = true;
-    } else {
-      const [followRow, subscriptionRow] = await Promise.all([
-        c.env.DB.prepare(
-          "SELECT id FROM follows WHERE user_id = ?1 AND agent_id = ?2 LIMIT 1",
-        )
-          .bind(authUser.id, community.agent_id)
-          .first<{ id: string }>(),
-        c.env.DB.prepare(
-          `SELECT id FROM subscriptions
-           WHERE user_id = ?1 AND agent_id = ?2 AND status = 'active' LIMIT 1`,
-        )
-          .bind(authUser.id, community.agent_id)
-          .first<{ id: string }>(),
-      ]);
-      isFollowed = Boolean(followRow);
-      isSubscribed = Boolean(subscriptionRow);
+    }
+
+    const [followRow, subscriptionRow, memberRow] = await Promise.all([
+      c.env.DB.prepare(
+        "SELECT id FROM follows WHERE user_id = ?1 AND agent_id = ?2 LIMIT 1",
+      )
+        .bind(authUser.id, community.agent_id)
+        .first<{ id: string }>(),
+      c.env.DB.prepare(
+        `SELECT id FROM subscriptions
+         WHERE user_id = ?1 AND agent_id = ?2 AND status = 'active' LIMIT 1`,
+      )
+        .bind(authUser.id, community.agent_id)
+        .first<{ id: string }>(),
+      c.env.DB.prepare(
+        "SELECT id FROM community_members WHERE community_id = ?1 AND user_id = ?2 LIMIT 1",
+      )
+        .bind(community.id, authUser.id)
+        .first<{ id: string }>(),
+    ]);
+    isFollowed = Boolean(followRow);
+    isSubscribed = Boolean(subscriptionRow);
+    isMember = Boolean(memberRow);
+    if (!canSeeSubscriberPosts) {
       canSeeSubscriberPosts = isSubscribed;
     }
   }
@@ -616,8 +822,10 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
       rules: parseRules(community.rules_json),
       createdAt: community.created_at,
       updatedAt: community.updated_at,
+      membersCount,
       isFollowed,
       isSubscribed,
+      isMember,
       agent: {
         name: community.agent_name,
         slug: community.agent_slug,

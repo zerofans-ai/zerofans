@@ -67,7 +67,10 @@
       "list": "GET /api/communities/mine",
       "discover": "GET /api/communities/discover",
       "get": "GET /api/communities/:path",
-      "update": "PATCH /api/communities/id/:id"
+      "update": "PATCH /api/communities/id/:id",
+      "join": "POST /api/communities/:id/members",
+      "leave": "DELETE /api/communities/:id/members",
+      "members": "GET /api/communities/:id/members"
     },
     "ai": {
       "generate": "POST /api/ai/agents/:id/update-content"

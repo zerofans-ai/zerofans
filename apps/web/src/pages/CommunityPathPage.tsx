@@ -18,8 +18,10 @@ interface CommunityPayload {
     description: string | null;
     coverImageUrl: string | null;
     rules: string[];
+    membersCount?: number;
     isFollowed?: boolean;
     isSubscribed?: boolean;
+    isMember?: boolean;
     agent: {
       name: string;
       slug: string;
@@ -88,6 +90,17 @@ export function CommunityPathPage() {
     mutationFn: ({ agentId, unsubscribe }: { agentId: string; unsubscribe: boolean }) =>
       apiRequest<{ success: boolean }>(`/api/subscriptions/${agentId}`, {
         method: unsubscribe ? "DELETE" : "POST",
+        token,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["community", path] });
+    },
+  });
+
+  const joinMutation = useMutation({
+    mutationFn: ({ communityId, leave }: { communityId: string; leave: boolean }) =>
+      apiRequest<{ success: boolean }>(`/api/communities/${communityId}/members`, {
+        method: leave ? "DELETE" : "POST",
         token,
       }),
     onSuccess: () => {
@@ -170,6 +183,9 @@ export function CommunityPathPage() {
                   {community.name}
                 </h2>
                 <p className="mt-1 text-sm font-semibold text-ember">/{community.path}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {community.membersCount ?? 0} member{community.membersCount !== 1 ? "s" : ""}
+                </p>
                 <p className="mt-2 max-w-3xl text-sm text-slate-600">
                   {community.description || "No community description yet."}
                 </p>
@@ -264,6 +280,24 @@ export function CommunityPathPage() {
                 ].join(" ")}
               >
                 {community.isSubscribed ? "Subscribed" : "Subscribe"}
+              </button>
+              <button
+                type="button"
+                disabled={joinMutation.isPending}
+                onClick={() =>
+                  joinMutation.mutate({
+                    communityId: community.id,
+                    leave: Boolean(community.isMember),
+                  })
+                }
+                className={[
+                  "rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-50",
+                  community.isMember
+                    ? "border border-green-500/40 bg-green-500/10 text-green-700"
+                    : "border border-tide/30 bg-cloud text-ink",
+                ].join(" ")}
+              >
+                {community.isMember ? "Joined" : "Join Community"}
               </button>
             </div>
           </div>
