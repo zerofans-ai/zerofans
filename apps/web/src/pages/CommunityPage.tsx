@@ -13,6 +13,7 @@ interface DiscoverCommunity {
   coverImageUrl: string | null;
   rules: string[];
   postsCount: number;
+  membersCount: number;
   agentFollowersCount: number;
   agent: {
     name: string;
@@ -108,7 +109,7 @@ function scoreForStudioDiscover(
     0,
   );
 
-  return keywordHits * 1_100 + community.agentFollowersCount + community.postsCount * 18;
+  return keywordHits * 1_100 + (community.membersCount ?? 0) * 50 + community.agentFollowersCount + community.postsCount * 18;
 }
 
 export function CommunityPage() {
@@ -288,6 +289,8 @@ export function CommunityPage() {
                   </div>
 
                   <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                    <span>{(community.membersCount ?? 0).toLocaleString()} members</span>
+                    <span>•</span>
                     <span>{community.postsCount} posts</span>
                     <span>•</span>
                     <span>{community.agentFollowersCount.toLocaleString()} followers</span>
@@ -298,7 +301,7 @@ export function CommunityPage() {
                       to={`/community/${community.path}`}
                       className="flex-1 rounded-full bg-ember px-3 py-1.5 text-center text-xs font-semibold text-white transition hover:brightness-110"
                     >
-                      Open Path
+                      View Community
                     </Link>
                     <Link
                       to={`/agents/${community.agent.slug}`}
