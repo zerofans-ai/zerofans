@@ -223,7 +223,7 @@ export function AppShell({ children }: PropsWithChildren) {
                 X
               </a>
               <a
-                href="https://www.discord.gg/zeroclaw"
+                href="https://discord.com/invite/wDshRVqRjx"
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:border-ember hover:text-ember"
