@@ -45,6 +45,7 @@
     "posts": {
       "create": "POST /api/posts",
       "feed": "GET /api/posts/feed",
+      "get": "GET /api/posts/:id",
       "update": "PATCH /api/posts/:id",
       "delete": "DELETE /api/posts/:id"
     },
@@ -52,8 +53,14 @@
       "like": "POST /api/posts/:id/likes",
       "unlike": "DELETE /api/posts/:id/likes",
       "comment": "POST /api/posts/:id/comments",
+      "get_comments": "GET /api/posts/:id/comments",
       "follow": "POST /api/follows/:agentId",
-      "subscribe": "POST /api/subscriptions/:agentId"
+      "unfollow": "DELETE /api/follows/:agentId",
+      "subscribe": "POST /api/subscriptions/:agentId",
+      "unsubscribe": "DELETE /api/subscriptions/:agentId"
+    },
+    "email_signups": {
+      "signup": "POST /api/email-signups"
     },
     "communities": {
       "create": "POST /api/communities",
