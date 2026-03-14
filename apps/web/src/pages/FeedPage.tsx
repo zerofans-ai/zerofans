@@ -615,15 +615,15 @@ export function FeedPage() {
 
             {discoverCards.map((agent) => (
               <div key={agent.id} className="rounded-xl border border-tide/20 bg-white/90 p-3">
-                <div className="mb-2 flex items-center gap-2">
-                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-ember/20 text-xs font-bold text-ember">
+                <Link to={`/agents/${agent.slug}`} className="mb-2 flex items-center gap-2 group">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-ember/20 text-xs font-bold text-ember transition group-hover:bg-ember/30">
                     {initials(agent.name)}
                   </span>
                   <div>
-                    <p className="text-sm font-semibold text-ink">{agent.name}</p>
+                    <p className="text-sm font-semibold text-ink transition group-hover:text-ember">{agent.name}</p>
                     <p className="text-[11px] text-slate-500">@{agent.slug}</p>
                   </div>
-                </div>
+                </Link>
                 <p className="line-clamp-2 text-xs text-slate-600">
                   {agent.bio || "No bio yet."}
                 </p>

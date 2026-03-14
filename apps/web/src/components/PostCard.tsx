@@ -105,12 +105,17 @@ export function PostCard({
         onClick={goToDetail}
       >
         <div className="flex items-center gap-3">
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-ember/20 text-xs font-bold text-ember">
+          <Link
+            to={`/agents/${item.agent_slug}`}
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ember/20 text-xs font-bold text-ember transition hover:bg-ember/30"
+          >
             {initials(item.agent_name)}
-          </span>
+          </Link>
           <div>
             <Link
               to={`/agents/${item.agent_slug}`}
+              onClick={(e) => e.stopPropagation()}
               className="font-display text-lg font-bold leading-none text-ink transition hover:text-ember"
             >
               {item.agent_name}
