@@ -18,22 +18,39 @@ const avatarUrlSchema = z
     message: "Invalid avatar URL",
   });
 
+const socialLinkSchema = z.object({
+  platform: z.string().min(1).max(30),
+  url: z.string().url().max(500),
+});
+
+const bannerUrlSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .refine((value) => isAllowedMediaUrl(value), {
+    message: "Invalid banner URL",
+  });
+
 const createAgentSchema = z.object({
   name: z.string().min(2).max(80),
   bio: z.string().max(500).optional(),
   avatarUrl: avatarUrlSchema.optional(),
+  bannerUrl: bannerUrlSchema.optional(),
   personalityTags: z.array(personalityTagSchema).max(12).optional(),
   skills: z.array(capabilitySchema).max(20).optional(),
   cliTools: z.array(capabilitySchema).max(20).optional(),
+  socials: z.array(socialLinkSchema).max(10).optional(),
 });
 
 const patchAgentSchema = z.object({
   name: z.string().min(2).max(80).optional(),
   bio: z.string().max(500).nullable().optional(),
   avatarUrl: avatarUrlSchema.nullable().optional(),
+  bannerUrl: bannerUrlSchema.nullable().optional(),
   personalityTags: z.array(personalityTagSchema).max(12).optional(),
   skills: z.array(capabilitySchema).max(20).optional(),
   cliTools: z.array(capabilitySchema).max(20).optional(),
+  socials: z.array(socialLinkSchema).max(10).optional(),
 });
 
 const discoverQuerySchema = z.object({
@@ -113,6 +130,19 @@ function parseStringArray(serialized: string | null): string[] {
   }
 }
 
+function parseSocials(serialized: string | null): Array<{ platform: string; url: string }> {
+  try {
+    const parsed = JSON.parse(serialized ?? "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item: unknown) =>
+        typeof item === "object" && item !== null && "platform" in item && "url" in item,
+    );
+  } catch {
+    return [];
+  }
+}
+
 function serializeStringArray(values: string[] | undefined): string {
   if (!values || values.length === 0) {
     return "[]";
@@ -144,10 +174,12 @@ agentsRoutes.post("/", requireAuth, async (c) => {
   const skills = serializeStringArray(parsed.data.skills);
   const cliTools = serializeStringArray(parsed.data.cliTools);
 
+  const socials = parsed.data.socials ? JSON.stringify(parsed.data.socials) : "[]";
+
   await c.env.DB.prepare(
     `INSERT INTO agents (
-      id, owner_user_id, name, slug, bio, personality_tags_json, skills_json, cli_tools_json, avatar_url, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now'))`,
+      id, owner_user_id, name, slug, bio, personality_tags_json, skills_json, cli_tools_json, avatar_url, banner_url, socials_json, created_at, updated_at
+    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'), datetime('now'))`,
   )
     .bind(
       id,
@@ -159,6 +191,8 @@ agentsRoutes.post("/", requireAuth, async (c) => {
       skills,
       cliTools,
       parsed.data.avatarUrl ?? null,
+      parsed.data.bannerUrl ?? null,
+      socials,
     )
     .run();
 
@@ -173,6 +207,8 @@ agentsRoutes.post("/", requireAuth, async (c) => {
       skills: parseStringArray(skills),
       cliTools: parseStringArray(cliTools),
       avatarUrl: parsed.data.avatarUrl ?? null,
+      bannerUrl: parsed.data.bannerUrl ?? null,
+      socials: parsed.data.socials ?? [],
     },
   });
 });
@@ -219,6 +255,10 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
     updates.push("avatar_url = ?");
     values.push(parsed.data.avatarUrl);
   }
+  if (parsed.data.bannerUrl !== undefined) {
+    updates.push("banner_url = ?");
+    values.push(parsed.data.bannerUrl);
+  }
   if (parsed.data.personalityTags !== undefined) {
     updates.push("personality_tags_json = ?");
     values.push(serializeStringArray(parsed.data.personalityTags));
@@ -230,6 +270,10 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
   if (parsed.data.cliTools !== undefined) {
     updates.push("cli_tools_json = ?");
     values.push(serializeStringArray(parsed.data.cliTools));
+  }
+  if (parsed.data.socials !== undefined) {
+    updates.push("socials_json = ?");
+    values.push(JSON.stringify(parsed.data.socials));
   }
 
   if (updates.length === 0) {
@@ -288,6 +332,7 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       a.slug,
       a.bio,
       a.avatar_url,
+      a.banner_url,
       a.personality_tags_json,
       a.skills_json,
       a.cli_tools_json,
@@ -322,6 +367,7 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       slug: string;
       bio: string | null;
       avatar_url: string | null;
+      banner_url: string | null;
       personality_tags_json: string | null;
       skills_json: string | null;
       cli_tools_json: string | null;
@@ -338,6 +384,7 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       slug: row.slug,
       bio: row.bio,
       avatarUrl: row.avatar_url,
+      bannerUrl: row.banner_url,
       personalityTags: parseStringArray(row.personality_tags_json),
       skills: parseStringArray(row.skills_json),
       cliTools: parseStringArray(row.cli_tools_json),
@@ -833,7 +880,7 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
   const authUser = c.get("authUser");
 
   const agent = await c.env.DB.prepare(
-    `SELECT id, owner_user_id, name, slug, bio, personality_tags_json, skills_json, cli_tools_json, avatar_url, created_at
+    `SELECT id, owner_user_id, name, slug, bio, personality_tags_json, skills_json, cli_tools_json, avatar_url, banner_url, socials_json, created_at
      FROM agents WHERE slug = ?1 LIMIT 1`,
   )
     .bind(slug)
@@ -847,6 +894,8 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
       skills_json: string | null;
       cli_tools_json: string | null;
       avatar_url: string | null;
+      banner_url: string | null;
+      socials_json: string | null;
       created_at: string;
     }>();
 
@@ -939,6 +988,8 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
       slug: agent.slug,
       bio: agent.bio,
       avatarUrl: agent.avatar_url,
+      bannerUrl: agent.banner_url,
+      socials: parseSocials(agent.socials_json),
       personalityTags: parseStringArray(agent.personality_tags_json),
       skills: parseStringArray(agent.skills_json),
       cliTools: parseStringArray(agent.cli_tools_json),

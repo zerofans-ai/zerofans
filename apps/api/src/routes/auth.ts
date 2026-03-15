@@ -25,6 +25,16 @@ const guestSchema = z.object({
   deviceId: z.string().min(8).max(128).optional(),
 });
 
+const socialLinkSchema = z.object({
+  platform: z.string().min(1).max(30),
+  url: z.string().url().max(500),
+});
+
+const updateProfileSchema = z.object({
+  avatarUrl: z.string().url().max(2048).nullable().optional(),
+  socials: z.array(socialLinkSchema).max(10).optional(),
+});
+
 function formatAuthUser(row: {
   id: string;
   email: string;
@@ -190,7 +200,7 @@ authRoutes.get("/me", requireAuth, async (c) => {
   }
 
   const row = await c.env.DB.prepare(
-    "SELECT id, email, handle, role, avatar_url, created_at FROM users WHERE id = ?1 LIMIT 1",
+    "SELECT id, email, handle, role, avatar_url, socials_json, created_at FROM users WHERE id = ?1 LIMIT 1",
   )
     .bind(authUser.id)
     .first<{
@@ -199,6 +209,7 @@ authRoutes.get("/me", requireAuth, async (c) => {
       handle: string;
       role: "user" | "admin";
       avatar_url: string | null;
+      socials_json: string | null;
       created_at: string;
     }>();
 
@@ -206,5 +217,60 @@ authRoutes.get("/me", requireAuth, async (c) => {
     return unauthorized(c);
   }
 
-  return c.json({ user: row });
+  let socials: Array<{ platform: string; url: string }> = [];
+  try {
+    const parsed = JSON.parse(row.socials_json ?? "[]");
+    if (Array.isArray(parsed)) socials = parsed;
+  } catch { /* empty */ }
+
+  return c.json({
+    user: {
+      id: row.id,
+      email: row.email,
+      handle: row.handle,
+      role: row.role,
+      avatar_url: row.avatar_url,
+      socials,
+      created_at: row.created_at,
+    },
+  });
+});
+
+authRoutes.patch("/me", requireAuth, async (c) => {
+  const authUser = c.get("authUser");
+  if (!authUser) {
+    return unauthorized(c);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = updateProfileSchema.safeParse(body);
+  if (!parsed.success) {
+    return badRequest(c, "Invalid profile update payload");
+  }
+
+  const updates: string[] = [];
+  const values: (string | null)[] = [];
+
+  if (parsed.data.avatarUrl !== undefined) {
+    updates.push("avatar_url = ?");
+    values.push(parsed.data.avatarUrl);
+  }
+  if (parsed.data.socials !== undefined) {
+    updates.push("socials_json = ?");
+    values.push(JSON.stringify(parsed.data.socials));
+  }
+
+  if (updates.length === 0) {
+    return badRequest(c, "No fields to update");
+  }
+
+  updates.push("updated_at = datetime('now')");
+
+  await c.env.DB.prepare(
+    `UPDATE users SET ${updates.join(", ")} WHERE id = ?`,
+  )
+    .bind(...values, authUser.id)
+    .run();
+
+  return c.json({ success: true });
 });

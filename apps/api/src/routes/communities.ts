@@ -678,6 +678,131 @@ communitiesRoutes.get("/:communityId/members", optionalAuth, async (c) => {
   });
 });
 
+// ─── Community Chat ─────────────────────────────────────────────
+
+const sendMessageSchema = z.object({
+  body: z.string().min(1).max(2000),
+  agentId: z.string().uuid().optional(),
+});
+
+communitiesRoutes.post("/:communityId/messages", requireAuth, async (c) => {
+  const authUser = c.get("authUser");
+  if (!authUser) {
+    return unauthorized(c);
+  }
+
+  const communityId = c.req.param("communityId");
+  const community = await c.env.DB.prepare(
+    "SELECT id FROM agent_communities WHERE id = ?1 LIMIT 1",
+  )
+    .bind(communityId)
+    .first<{ id: string }>();
+  if (!community) {
+    return notFound(c, "Community not found");
+  }
+
+  const rawBody = await c.req.json().catch(() => null);
+  const parsed = sendMessageSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return badRequest(c, "Invalid message payload");
+  }
+
+  const agentId = parsed.data.agentId ?? null;
+  if (agentId) {
+    const agent = await ensureOwnedAgent(c, agentId);
+    if (!agent) {
+      return forbidden(c, "You can only send messages as your own agent");
+    }
+  }
+
+  const id = crypto.randomUUID();
+  await c.env.DB.prepare(
+    `INSERT INTO community_messages (id, community_id, user_id, agent_id, body, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
+  )
+    .bind(id, communityId, agentId ? null : authUser.id, agentId, parsed.data.body.trim())
+    .run();
+
+  return c.json({
+    message: {
+      id,
+      communityId,
+      userId: agentId ? null : authUser.id,
+      agentId,
+      body: parsed.data.body.trim(),
+      userHandle: agentId ? null : authUser.handle,
+    },
+  });
+});
+
+communitiesRoutes.get("/:communityId/messages", optionalAuth, async (c) => {
+  const communityId = c.req.param("communityId");
+  const limit = Math.min(100, Math.max(1, Number(c.req.query("limit") ?? 50)));
+  const before = c.req.query("before") ?? null;
+
+  const community = await c.env.DB.prepare(
+    "SELECT id FROM agent_communities WHERE id = ?1 LIMIT 1",
+  )
+    .bind(communityId)
+    .first<{ id: string }>();
+  if (!community) {
+    return notFound(c, "Community not found");
+  }
+
+  const whereClause = before
+    ? "cm.community_id = ?1 AND cm.deleted_at IS NULL AND cm.created_at < ?3"
+    : "cm.community_id = ?1 AND cm.deleted_at IS NULL";
+
+  const bindings = before ? [communityId, limit, before] : [communityId, limit];
+
+  const rows = await c.env.DB.prepare(
+    `SELECT
+      cm.id,
+      cm.user_id,
+      cm.agent_id,
+      cm.body,
+      cm.created_at,
+      u.handle AS user_handle,
+      u.avatar_url AS user_avatar_url,
+      a.name AS agent_name,
+      a.slug AS agent_slug,
+      a.avatar_url AS agent_avatar_url
+     FROM community_messages cm
+     LEFT JOIN users u ON u.id = cm.user_id
+     LEFT JOIN agents a ON a.id = cm.agent_id
+     WHERE ${whereClause}
+     ORDER BY cm.created_at DESC
+     LIMIT ?2`,
+  )
+    .bind(...bindings)
+    .all<{
+      id: string;
+      user_id: string | null;
+      agent_id: string | null;
+      body: string;
+      created_at: string;
+      user_handle: string | null;
+      user_avatar_url: string | null;
+      agent_name: string | null;
+      agent_slug: string | null;
+      agent_avatar_url: string | null;
+    }>();
+
+  return c.json({
+    items: rows.results.map((row) => ({
+      id: row.id,
+      body: row.body,
+      createdAt: row.created_at,
+      user: row.user_id
+        ? { id: row.user_id, handle: row.user_handle, avatarUrl: row.user_avatar_url }
+        : null,
+      agent: row.agent_id
+        ? { id: row.agent_id, name: row.agent_name, slug: row.agent_slug, avatarUrl: row.agent_avatar_url }
+        : null,
+    })),
+  });
+});
+
 // ─── Get Community by Path (catch-all, must be last) ────────────
 
 communitiesRoutes.get("/:path", optionalAuth, async (c) => {

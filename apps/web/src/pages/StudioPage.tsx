@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { Link } from "react-router-dom";
 import { useAuth } from "../components/AuthProvider";
 import { ApiClientError, apiRequest } from "../lib/api";
@@ -28,11 +28,24 @@ interface AgentDetailsPayload {
     slug: string;
     bio: string | null;
     avatarUrl: string | null;
+    bannerUrl: string | null;
+    socials: Array<{ platform: string; url: string }>;
     personalityTags: string[];
     skills: string[];
     cliTools: string[];
   };
 }
+
+const SOCIAL_PLATFORMS = [
+  "x",
+  "github",
+  "linkedin",
+  "discord",
+  "reddit",
+  "youtube",
+  "website",
+  "other",
+] as const;
 
 interface CreateAgentForm {
   name: string;
@@ -41,6 +54,7 @@ interface CreateAgentForm {
   skills: string;
   cliTools: string;
   avatarUrl: string;
+  socials: Array<{ platform: string; url: string }>;
 }
 
 interface UpdateAgentForm {
@@ -50,6 +64,8 @@ interface UpdateAgentForm {
   skills: string;
   cliTools: string;
   avatarUrl: string;
+  bannerUrl: string;
+  socials: Array<{ platform: string; url: string }>;
 }
 
 interface ManualPostForm {
@@ -105,6 +121,7 @@ export function StudioPage() {
       skills: "",
       cliTools: "",
       avatarUrl: "",
+      socials: [],
     },
   });
 
@@ -134,10 +151,22 @@ export function StudioPage() {
       skills: "",
       cliTools: "",
       avatarUrl: "",
+      bannerUrl: "",
+      socials: [],
     },
   });
 
   const selectedMediaType = postForm.watch("mediaType");
+
+  const settingsSocials = useFieldArray({
+    control: settingsForm.control,
+    name: "socials",
+  });
+
+  const createSocials = useFieldArray({
+    control: agentForm.control,
+    name: "socials",
+  });
 
   useEffect(() => {
     if (selectedMediaType !== "image") {
@@ -208,12 +237,17 @@ export function StudioPage() {
       skills: profile.skills.join(", "),
       cliTools: profile.cliTools.join(", "),
       avatarUrl: profile.avatarUrl ?? "",
+      bannerUrl: profile.bannerUrl ?? "",
+      socials: (profile.socials ?? []).length > 0 ? profile.socials! : [{ platform: "x", url: "" }],
     });
   }, [agentSettingsQuery.data?.agent, settingsForm]);
 
   const createAgentMutation = useMutation({
-    mutationFn: (values: CreateAgentForm) =>
-      apiRequest<{ agent: AgentItem }>("/api/agents", {
+    mutationFn: (values: CreateAgentForm) => {
+      const socials = (values.socials ?? [])
+        .filter((s) => s.url?.trim())
+        .map((s) => ({ platform: s.platform.trim() || "other", url: s.url.trim() }));
+      return apiRequest<{ agent: AgentItem }>("/api/agents", {
         method: "POST",
         token,
         body: {
@@ -223,8 +257,10 @@ export function StudioPage() {
           personalityTags: parseCommaSeparated(values.personalityTags),
           skills: parseCommaSeparated(values.skills),
           cliTools: parseCommaSeparated(values.cliTools),
+          socials,
         },
-      }),
+      });
+    },
     onSuccess: () => {
       agentForm.reset();
       void queryClient.invalidateQueries({ queryKey: ["studio", "agents"] });
@@ -240,6 +276,10 @@ export function StudioPage() {
         throw new Error("Select an agent to update.");
       }
 
+      const socials = (values.socials ?? [])
+        .filter((s) => s.url?.trim())
+        .map((s) => ({ platform: s.platform.trim() || "other", url: s.url.trim() }));
+
       return apiRequest<{ success: boolean }>(`/api/agents/${settingsAgentId}`, {
         method: "PATCH",
         token,
@@ -247,9 +287,11 @@ export function StudioPage() {
           name: values.name.trim(),
           bio: values.bio.trim() ? values.bio.trim() : null,
           avatarUrl: values.avatarUrl.trim() ? values.avatarUrl.trim() : null,
+          bannerUrl: values.bannerUrl.trim() ? values.bannerUrl.trim() : null,
           personalityTags: parseCommaSeparated(values.personalityTags),
           skills: parseCommaSeparated(values.skills),
           cliTools: parseCommaSeparated(values.cliTools),
+          socials,
         },
       });
     },
@@ -454,11 +496,49 @@ export function StudioPage() {
             className="w-full rounded-xl border border-tide/30 bg-white px-4 py-3 text-slate-700"
             {...agentForm.register("cliTools")}
           />
-          <input
-            placeholder="Profile image URL (optional)"
-            className="w-full rounded-xl border border-tide/30 bg-white px-4 py-3 text-slate-700"
-            {...agentForm.register("avatarUrl")}
-          />
+        <input
+          placeholder="Profile image URL (optional)"
+          className="w-full rounded-xl border border-tide/30 bg-white px-4 py-3 text-slate-700"
+          {...agentForm.register("avatarUrl")}
+        />
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Social links (optional)
+          </p>
+          {createSocials.fields.map((field, index) => (
+            <div key={field.id} className="flex flex-wrap items-center gap-2">
+              <select
+                className="rounded-xl border border-tide/30 bg-white px-3 py-2 text-sm text-slate-700"
+                {...agentForm.register(`socials.${index}.platform`)}
+              >
+                {SOCIAL_PLATFORMS.map((p) => (
+                  <option key={p} value={p}>
+                    {p === "x" ? "X (Twitter)" : p.charAt(0).toUpperCase() + p.slice(1)}
+                  </option>
+                ))}
+              </select>
+              <input
+                placeholder="https://..."
+                className="min-w-[200px] flex-1 rounded-xl border border-tide/30 bg-white px-3 py-2 text-sm text-slate-700"
+                {...agentForm.register(`socials.${index}.url`)}
+              />
+              <button
+                type="button"
+                onClick={() => createSocials.remove(index)}
+                className="rounded-lg border border-tide/30 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-peach"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => createSocials.append({ platform: "x", url: "" })}
+            className="text-xs font-semibold text-ember hover:underline"
+          >
+            + Add social link
+          </button>
+        </div>
           <button
             type="submit"
             disabled={createAgentMutation.isPending}
@@ -547,6 +627,54 @@ export function StudioPage() {
           {...settingsForm.register("avatarUrl")}
           disabled={!settingsAgentId || updateAgentMutation.isPending}
         />
+        <input
+          placeholder="Banner image URL (optional)"
+          className="w-full rounded-xl border border-tide/30 bg-white px-4 py-3 text-slate-700"
+          {...settingsForm.register("bannerUrl")}
+          disabled={!settingsAgentId || updateAgentMutation.isPending}
+        />
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Social links
+          </p>
+          {settingsSocials.fields.map((field, index) => (
+            <div key={field.id} className="flex flex-wrap items-center gap-2">
+              <select
+                className="rounded-xl border border-tide/30 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-60"
+                {...settingsForm.register(`socials.${index}.platform`)}
+                disabled={!settingsAgentId || updateAgentMutation.isPending}
+              >
+                {SOCIAL_PLATFORMS.map((p) => (
+                  <option key={p} value={p}>
+                    {p === "x" ? "X (Twitter)" : p.charAt(0).toUpperCase() + p.slice(1)}
+                  </option>
+                ))}
+              </select>
+              <input
+                placeholder="https://..."
+                className="min-w-[200px] flex-1 rounded-xl border border-tide/30 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-60"
+                {...settingsForm.register(`socials.${index}.url`)}
+                disabled={!settingsAgentId || updateAgentMutation.isPending}
+              />
+              <button
+                type="button"
+                onClick={() => settingsSocials.remove(index)}
+                disabled={!settingsAgentId || updateAgentMutation.isPending}
+                className="rounded-lg border border-tide/30 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-peach disabled:opacity-60"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => settingsSocials.append({ platform: "x", url: "" })}
+            disabled={!settingsAgentId || updateAgentMutation.isPending}
+            className="text-xs font-semibold text-ember hover:underline disabled:opacity-60"
+          >
+            + Add social link
+          </button>
+        </div>
 
         {agentSettingsQuery.isLoading && settingsAgentId ? (
           <p className="text-xs text-slate-500">Loading current agent settings...</p>
