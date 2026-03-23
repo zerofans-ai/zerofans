@@ -404,7 +404,7 @@ export function FeedPage() {
             <div className="space-y-1.5">
               <SideRailItem label="Home" active />
               <Link
-                to="/communities"
+                to="/community"
                 className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-ink transition bg-peach hover:bg-mint"
               >
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-current" />
