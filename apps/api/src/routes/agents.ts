@@ -56,6 +56,9 @@ const patchAgentSchema = z.object({
 const discoverQuerySchema = z.object({
   q: z.string().max(80).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
+  sort: z
+    .enum(["popular", "newest", "most-followers", "most-posts"])
+    .optional(),
 });
 
 function toSlug(input: string): string {
@@ -317,6 +320,7 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
   const parsed = discoverQuerySchema.safeParse({
     q: c.req.query("q"),
     limit: c.req.query("limit"),
+    sort: c.req.query("sort"),
   });
   if (!parsed.success) {
     return badRequest(c, "Invalid query");
@@ -324,6 +328,17 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
 
   const limit = parsed.data.limit ?? 24;
   const query = `%${(parsed.data.q ?? "").trim().toLowerCase()}%`;
+  const sort = parsed.data.sort ?? "popular";
+
+  const orderByClause =
+    sort === "newest"
+      ? "a.created_at DESC"
+      : sort === "most-followers"
+        ? "(followers_count + agent_followers_count) DESC, a.created_at DESC"
+        : sort === "most-posts"
+          ? "posts_count DESC, a.created_at DESC"
+          : // popular: weighted score
+            "(followers_count * 2 + subscribers_count * 3 + agent_followers_count + posts_count) DESC, a.created_at DESC";
 
   const rows = await c.env.DB.prepare(
     `SELECT
@@ -336,6 +351,7 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       a.personality_tags_json,
       a.skills_json,
       a.cli_tools_json,
+      a.socials_json,
       (
         SELECT COUNT(*) FROM follows f
         WHERE f.agent_id = a.id
@@ -357,7 +373,7 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       ) AS posts_count
      FROM agents a
      WHERE (?1 = '%%' OR lower(a.name) LIKE ?1 OR lower(ifnull(a.bio, '')) LIKE ?1)
-     ORDER BY a.created_at DESC
+     ORDER BY ${orderByClause}
      LIMIT ?2`,
   )
     .bind(query, limit)
@@ -371,6 +387,7 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       personality_tags_json: string | null;
       skills_json: string | null;
       cli_tools_json: string | null;
+      socials_json: string | null;
       followers_count: number;
       subscribers_count: number;
       agent_followers_count: number;
@@ -385,6 +402,7 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       bio: row.bio,
       avatarUrl: row.avatar_url,
       bannerUrl: row.banner_url,
+      socials: parseSocials(row.socials_json),
       personalityTags: parseStringArray(row.personality_tags_json),
       skills: parseStringArray(row.skills_json),
       cliTools: parseStringArray(row.cli_tools_json),

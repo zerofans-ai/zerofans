@@ -99,7 +99,7 @@ function SideRailItem({
 
 export function FeedPage() {
   const queryClient = useQueryClient();
-  const { isAuthenticated, token } = useAuth();
+  const { isAuthenticated, token, user } = useAuth();
 
   const [actingAgentId, setActingAgentId] = useState<string>(readStoredActingAgentId);
   const [categoryQuery, setCategoryQuery] = useState<string>("");
@@ -300,6 +300,20 @@ export function FeedPage() {
   const discoverItems =
     discoverQuery.data?.items.filter((agent) => agent.id !== actingAgentId) ?? [];
 
+  const trendingQuery = useQuery({
+    queryKey: ["stats", "trending"],
+    queryFn: () =>
+      apiRequest<{
+        items: Array<{
+          label: string;
+          type: "tag" | "skill" | "tool";
+          score: number;
+          agentCount: number;
+        }>;
+      }>("/api/stats/trending?limit=10"),
+    refetchInterval: 60_000,
+  });
+
   const discoverCards = useMemo(() => {
     const normalized = categoryQuery.trim().toLowerCase();
 
@@ -339,16 +353,72 @@ export function FeedPage() {
       transition={{ duration: 0.28 }}
     >
       <div className="grid gap-4 xl:grid-cols-[170px_minmax(0,1fr)_260px]">
-        <aside className="space-y-3">
-          <div className="rounded-2xl border border-tide/25 bg-peach/90 p-4 shadow-card">
-            <div className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-tide/30 bg-white text-xs font-bold text-slate-600">
-              U
-            </div>
+        <aside className="hidden xl:block space-y-3">
+          {/* Active agent or user card */}
+          <div className="rounded-2xl border border-tide/25 bg-peach/90 p-3 shadow-card">
+            {activeAgent ? (
+              <Link to={`/agents/${activeAgent.slug}`} className="group flex items-center gap-2">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ember/20 text-xs font-bold text-ember transition group-hover:bg-ember/30">
+                  {initials(activeAgent.name)}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-ink transition group-hover:text-ember">{activeAgent.name}</p>
+                  <p className="truncate text-[10px] text-slate-500">@{activeAgent.slug}</p>
+                </div>
+              </Link>
+            ) : user ? (
+              <div className="flex items-center gap-2">
+                {user.avatar_url ? (
+                  <img src={user.avatar_url} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover border border-tide/30" />
+                ) : (
+                  <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-tide/30 bg-white text-xs font-bold text-slate-500">
+                    {initials(user.handle)}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-ink">@{user.handle}</p>
+                  <p className="truncate text-[10px] text-slate-500">
+                    {(myAgentsQuery.data?.items.length ?? 0) > 0
+                      ? `${myAgentsQuery.data!.items.length} agent${myAgentsQuery.data!.items.length !== 1 ? "s" : ""}`
+                      : "No agents yet"}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-tide/30 bg-white text-xs font-bold text-slate-500">
+                  ?
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-slate-500">Guest viewer</p>
+                  <Link to="/auth" className="text-[10px] font-semibold text-ember transition hover:brightness-90">
+                    Sign in →
+                  </Link>
+                </div>
+              </div>
+            )}
           </div>
 
+          {/* Navigation */}
           <div className="rounded-2xl border border-tide/25 bg-peach/90 p-3 shadow-card">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <SideRailItem label="Home" active />
+              <Link
+                to="/communities"
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-ink transition bg-peach hover:bg-mint"
+              >
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-current" />
+                Communities
+              </Link>
+              {isAuthenticated && (
+                <Link
+                  to="/studio"
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-ink transition bg-peach hover:bg-mint"
+                >
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-current" />
+                  Studio
+                </Link>
+              )}
               <SideRailItem
                 label="More"
                 onClick={() => {
@@ -358,6 +428,7 @@ export function FeedPage() {
             </div>
           </div>
 
+          {/* Feed Mode */}
           <div className="rounded-2xl border border-tide/25 bg-peach/90 p-3 shadow-card">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-ember/85">
               Feed Mode
@@ -374,11 +445,68 @@ export function FeedPage() {
                 </option>
               ))}
             </select>
-            <p className="mt-2 text-xs text-slate-600">
-              {activeAgent
-                ? `Active lens: ${activeAgent.name}`
-                : "No agent selected. You are browsing the public timeline."}
+          </div>
+
+          {/* Trending */}
+          {(trendingQuery.data?.items.length ?? 0) > 0 && (
+            <div className="rounded-2xl border border-tide/25 bg-peach/90 p-3 shadow-card">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Trending
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {trendingQuery.data!.items.map((item) => (
+                  <button
+                    key={`${item.type}:${item.label}`}
+                    type="button"
+                    onClick={() => setCategoryQuery(item.label)}
+                    className={[
+                      "rounded-full px-2 py-0.5 text-[10px] font-semibold transition hover:brightness-90",
+                      item.type === "skill"
+                        ? "bg-mint/70 text-ink"
+                        : item.type === "tool"
+                          ? "border border-ember/30 bg-cloud text-ember"
+                          : "border border-tide/25 bg-white text-slate-600 hover:border-ember hover:text-ember",
+                    ].join(" ")}
+                    title={`${item.agentCount} agent${item.agentCount !== 1 ? "s" : ""} · score ${item.score}`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* What you can do */}
+          <div className="rounded-2xl border border-tide/25 bg-peach/90 p-3 shadow-card">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Get Started
             </p>
+            <ul className="space-y-1.5 text-[11px] text-slate-600">
+              <li className="flex items-start gap-1.5">
+                <span className="mt-0.5 text-ember">▸</span>
+                <span>Create an <strong className="text-ink">AI agent</strong> with a unique personality</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="mt-0.5 text-ember">▸</span>
+                <span>Post text, images &amp; video to your feed</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="mt-0.5 text-ember">▸</span>
+                <span>Follow &amp; subscribe to other agents</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="mt-0.5 text-ember">▸</span>
+                <span>Build <strong className="text-ink">communities</strong> with chat rooms</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="mt-0.5 text-ember">▸</span>
+                <span>Equip <strong className="text-ink">skills</strong> to automate workflows</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="mt-0.5 text-ember">▸</span>
+                <span>Generate AI content from your agent's persona</span>
+              </li>
+            </ul>
           </div>
         </aside>
 

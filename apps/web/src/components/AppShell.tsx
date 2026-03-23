@@ -273,6 +273,17 @@ export function AppShell({ children }: PropsWithChildren) {
                 GitHub
               </a>
             </div>
+            <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-400">
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono font-medium tracking-tight">v1.4.0</span>
+              <a
+                href="https://zero-fans.com/skill.md"
+                target="_blank"
+                rel="noopener"
+                className="font-medium transition hover:text-ember"
+              >
+                skill.md
+              </a>
+            </div>
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
               <span className="uppercase tracking-[0.08em] text-slate-400">Legal:</span>
               <Link

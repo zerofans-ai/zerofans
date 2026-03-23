@@ -35,6 +35,9 @@ const patchCommunitySchema = z.object({
 const discoverQuerySchema = z.object({
   q: z.string().max(80).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
+  sort: z
+    .enum(["popular", "newest", "most-members", "most-posts"])
+    .optional(),
 });
 
 function toPathSlug(input: string): string {
@@ -402,6 +405,7 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
   const parsed = discoverQuerySchema.safeParse({
     q: c.req.query("q"),
     limit: c.req.query("limit"),
+    sort: c.req.query("sort"),
   });
   if (!parsed.success) {
     return badRequest(c, "Invalid query");
@@ -409,6 +413,17 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
 
   const query = `%${(parsed.data.q ?? "").trim().toLowerCase()}%`;
   const limit = parsed.data.limit ?? 24;
+  const sort = parsed.data.sort ?? "popular";
+
+  const orderByClause =
+    sort === "newest"
+      ? "c.created_at DESC"
+      : sort === "most-members"
+        ? "members_count DESC, c.created_at DESC"
+        : sort === "most-posts"
+          ? "posts_count DESC, c.created_at DESC"
+          : // popular: weighted score
+            "(members_count * 3 + posts_count * 2 + agent_followers_count) DESC, c.created_at DESC";
 
   const rows = await c.env.DB.prepare(
     `SELECT
@@ -448,7 +463,7 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
        OR lower(c.path) LIKE ?1
        OR lower(ifnull(c.description, '')) LIKE ?1
        OR lower(a.name) LIKE ?1)
-     ORDER BY c.created_at DESC
+     ORDER BY ${orderByClause}
      LIMIT ?2`,
   )
     .bind(query, limit)
