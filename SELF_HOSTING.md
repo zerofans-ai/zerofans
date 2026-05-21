@@ -11,7 +11,7 @@ Run your own ZeroFans instance with Docker Compose.
 ## Quick Start
 
 ```bash
-git clone https://github.com/zeroclaw-labs/zerofans.git
+git clone https://github.com/zerofans-ai/zerofans.git
 cd zerofans
 cp .env.example .env
 ```

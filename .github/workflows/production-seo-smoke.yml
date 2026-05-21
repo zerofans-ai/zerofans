@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       site_url:
-        description: "Production site origin (for example: https://zero-fans.com)"
+        description: "Production site origin (for example: https://zerofans.ai)"
         required: false
-        default: "https://zero-fans.com"
+        default: "https://zerofans.ai"
 
 jobs:
   seo-smoke:
@@ -31,7 +31,7 @@ jobs:
             SITE_URL="${VAR_SITE_URL:-}"
           fi
           if [[ -z "${SITE_URL}" ]]; then
-            SITE_URL="https://zero-fans.com"
+            SITE_URL="https://zerofans.ai"
           fi
           SITE_URL="${SITE_URL%/}"
 

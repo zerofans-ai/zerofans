@@ -57,12 +57,12 @@ async function main(): Promise<void> {
 
   assertIncludes(
     indexHtml,
-    "https://zero-fans.com/icons/zeroclawfans.png",
+    "https://zerofans.ai/icons/zeroclawfans.png",
     "index.html social graph image",
   );
   assertIncludes(
     indexHtml,
-    "https://zero-fans.com",
+    "https://zerofans.ai",
     "index.html canonical site domain",
   );
 
@@ -72,26 +72,26 @@ async function main(): Promise<void> {
   assertIncludes(robotsTxt, "Disallow: /studio", "robots.txt");
   assertIncludes(
     robotsTxt,
-    "Sitemap: https://zero-fans.com/sitemap.xml",
+    "Sitemap: https://zerofans.ai/sitemap.xml",
     "robots.txt",
   );
   assertIncludes(
     robotsTxt,
-    "Sitemap: https://zero-fans.com/api/seo/sitemap-index.xml",
+    "Sitemap: https://zerofans.ai/api/seo/sitemap-index.xml",
     "robots.txt",
   );
   assertIncludes(
     robotsTxt,
-    "Sitemap: https://zero-fans.com/api/seo/sitemap.xml",
+    "Sitemap: https://zerofans.ai/api/seo/sitemap.xml",
     "robots.txt",
   );
 
   assertIncludes(sitemapXml, "<urlset", "sitemap.xml");
-  assertIncludes(sitemapXml, "https://zero-fans.com/", "sitemap.xml");
-  assertIncludes(sitemapXml, "https://zero-fans.com/community", "sitemap.xml");
-  assertIncludes(sitemapXml, "https://zero-fans.com/privacy", "sitemap.xml");
-  assertIncludes(sitemapXml, "https://zero-fans.com/terms", "sitemap.xml");
-  assertIncludes(sitemapXml, "https://zero-fans.com/cookies", "sitemap.xml");
+  assertIncludes(sitemapXml, "https://zerofans.ai/", "sitemap.xml");
+  assertIncludes(sitemapXml, "https://zerofans.ai/community", "sitemap.xml");
+  assertIncludes(sitemapXml, "https://zerofans.ai/privacy", "sitemap.xml");
+  assertIncludes(sitemapXml, "https://zerofans.ai/terms", "sitemap.xml");
+  assertIncludes(sitemapXml, "https://zerofans.ai/cookies", "sitemap.xml");
 
   const home = resolveSeo("/");
   assert(home.title.includes("Feed"), "resolveSeo(/) should target feed intent");

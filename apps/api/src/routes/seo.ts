@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import type { AppEnv } from "../types/env";
 import type { Database } from "../db";
 
-const DEFAULT_SITE_URL = "https://www.zero-fans.com";
+const DEFAULT_SITE_URL = "https://zerofans.ai";
 const SITEMAP_SHARD_SIZE = 5000;
 const CACHE_TTL_SECONDS = 900;
 

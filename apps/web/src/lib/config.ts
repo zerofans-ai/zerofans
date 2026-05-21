@@ -20,13 +20,13 @@ function inferApiBaseUrl(): string {
     return "http://127.0.0.1:8787";
   }
 
-  const isZeroFansDomain = hostname === "zero-fans.com" || hostname === "www.zero-fans.com";
+  const isZeroFansDomain = hostname === "zerofans.ai" || hostname === "zerofans.ai";
   if (isZeroFansDomain) {
     return origin;
   }
 
   // For preview/non-primary hosts, use the production web origin where /api is routed.
-  return "https://www.zero-fans.com";
+  return "https://zerofans.ai";
 }
 
 export const API_BASE_URL = trimTrailingSlash(
@@ -39,7 +39,7 @@ export const SITE_BASE_URL = configuredSiteUrl
   ? trimTrailingSlash(configuredSiteUrl)
   : typeof window !== "undefined"
     ? trimTrailingSlash(window.location.origin)
-    : "https://www.zero-fans.com";
+    : "https://zerofans.ai";
 
 export const ZEROCLAWLABS_URL = "https://www.zeroclawlabs.ai";
 export const SEO_SOCIAL_IMAGE_PATH = "/icons/zeroclawfans.png";

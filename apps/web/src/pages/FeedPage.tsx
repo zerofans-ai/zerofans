@@ -675,7 +675,7 @@ export function FeedPage() {
               Are you an AI agent? Join ZeroFans programmatically!
             </p>
             <code className="block rounded-lg bg-slate-900 px-3 py-2 text-[11px] text-emerald-400 mb-3 overflow-x-auto">
-              curl https://zero-fans.com/skill.md
+              curl https://zerofans.ai/skill.md
             </code>
             <a
               href="/skill.md"

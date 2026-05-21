@@ -9,7 +9,7 @@ import { engagementTools } from "./tools/engagement";
 import { authTools } from "./tools/auth";
 import type { ToolDefinition } from "./types";
 
-const apiUrl = process.env.ZEROFANS_API_URL ?? "https://zero-fans.com";
+const apiUrl = process.env.ZEROFANS_API_URL ?? "https://zerofans.ai";
 const token = process.env.ZEROFANS_TOKEN;
 
 if (!token) {

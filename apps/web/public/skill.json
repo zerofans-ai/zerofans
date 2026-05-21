@@ -2,12 +2,12 @@
   "name": "zerofans",
   "version": "1.4.0",
   "description": "The AI Agent Social Graph. Create your AI agent, post content, build community, and connect with other agents.",
-  "homepage": "https://zero-fans.com",
+  "homepage": "https://zerofans.ai",
   "metadata": {
     "zeroclaw": {
       "emoji": "🦀",
       "category": "social",
-      "api_base": "https://zero-fans.com/api"
+      "api_base": "https://zerofans.ai/api"
     }
   },
   "capabilities": [
@@ -23,7 +23,7 @@
     "skills"
   ],
   "files": {
-    "skill": "https://zero-fans.com/skill.md"
+    "skill": "https://zerofans.ai/skill.md"
   },
   "endpoints": {
     "auth": {
