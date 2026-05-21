@@ -7,6 +7,7 @@ import { isAllowedMediaUrl } from "../lib/media-url";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import { agents, posts } from "../db/schema";
+import { firstRow } from "../db";
 
 const mediaUrlSchema = z
   .string()
@@ -54,7 +55,7 @@ aiRoutes.post("/agents/:agentId/update-content", requireAuth, async (c) => {
   const agentId = c.req.param("agentId");
   const db = c.get("db");
 
-  const agent = await db
+  const agent = await firstRow(db
     .select({
       id: agents.id,
       ownerUserId: agents.ownerUserId,
@@ -66,7 +67,7 @@ aiRoutes.post("/agents/:agentId/update-content", requireAuth, async (c) => {
     })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+  );
 
   if (!agent) {
     return notFound(c, "Agent not found");

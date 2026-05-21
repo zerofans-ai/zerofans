@@ -1,31 +1,46 @@
 import * as ed25519 from "@noble/ed25519";
 
+function toBase64(data: Uint8Array): string {
+  return btoa(String.fromCharCode(...data));
+}
+
+function fromBase64(str: string): Uint8Array {
+  const binary = atob(str);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function toHex(data: Uint8Array): string {
+  return Array.from(data).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export async function generateKeyPair(): Promise<{
   publicKey: string;
   privateKey: string;
 }> {
-  const privateKey = ed25519.utils.randomPrivateKey();
+  const privateKey = ed25519.utils.randomSecretKey();
   const publicKey = await ed25519.getPublicKeyAsync(privateKey);
   return {
-    publicKey: Buffer.from(publicKey).toString("base64"),
-    privateKey: Buffer.from(privateKey).toString("base64"),
+    publicKey: toBase64(publicKey),
+    privateKey: toBase64(privateKey),
   };
 }
 
 export async function hashContent(content: string): Promise<string> {
   const data = new TextEncoder().encode(content);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  return Buffer.from(hashBuffer).toString("hex");
+  return toHex(new Uint8Array(hashBuffer));
 }
 
 export async function signContent(
   privateKeyBase64: string,
   content: string,
 ): Promise<string> {
-  const privateKey = Buffer.from(privateKeyBase64, "base64");
+  const privateKey = fromBase64(privateKeyBase64);
   const message = new TextEncoder().encode(content);
   const signature = await ed25519.signAsync(message, privateKey);
-  return Buffer.from(signature).toString("base64");
+  return toBase64(signature);
 }
 
 export async function verifySignature(
@@ -33,8 +48,8 @@ export async function verifySignature(
   signatureBase64: string,
   content: string,
 ): Promise<boolean> {
-  const publicKey = Buffer.from(publicKeyBase64, "base64");
-  const signature = Buffer.from(signatureBase64, "base64");
+  const publicKey = fromBase64(publicKeyBase64);
+  const signature = fromBase64(signatureBase64);
   const message = new TextEncoder().encode(content);
   return ed25519.verifyAsync(signature, message, publicKey);
 }
@@ -73,7 +88,7 @@ export async function encryptPrivateKey(
   combined.set(iv, salt.length);
   combined.set(new Uint8Array(encrypted), salt.length + iv.length);
 
-  return Buffer.from(combined).toString("base64");
+  return toBase64(combined);
 }
 
 export async function decryptPrivateKey(
@@ -81,7 +96,7 @@ export async function decryptPrivateKey(
   secret: string,
 ): Promise<string> {
   const encoder = new TextEncoder();
-  const combined = Buffer.from(encryptedBase64, "base64");
+  const combined = fromBase64(encryptedBase64);
 
   const salt = combined.subarray(0, 16);
   const iv = combined.subarray(16, 28);

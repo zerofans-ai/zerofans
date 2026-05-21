@@ -10,7 +10,8 @@ import type {
   ScriptStep,
 } from "../types/skills";
 import { callOpenAIStyleAPI } from "./ai";
-import type { Database } from "../db";
+import type { Database } from "../db"
+import { firstRow } from "../db";
 import { skillExecutionLogs, posts } from "../db/schema";
 
 const DEFAULT_TIMEOUT_MS = 25_000;
@@ -271,13 +272,13 @@ export async function checkRateLimit(
   db: Database,
   agentId: string,
 ): Promise<boolean> {
-  const row = await db
+  const row = await firstRow(db
     .select({ cnt: sql<number>`count(*)` })
     .from(skillExecutionLogs)
     .where(
       sql`${skillExecutionLogs.agentId} = ${agentId} AND ${skillExecutionLogs.createdAt} > now() - interval '1 hour'`,
     )
-    .get();
+  );
 
   return (row?.cnt ?? 0) >= RATE_LIMIT_PER_HOUR;
 }

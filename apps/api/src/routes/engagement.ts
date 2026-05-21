@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { eq, sql, and, isNull } from "drizzle-orm";
 import { badRequest, notFound, unauthorized } from "../lib/http";
+import { firstRow } from "../db";
 import { hashContent } from "../lib/signing";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
@@ -30,11 +31,11 @@ engagementRoutes.post("/follows/:agentId", requireAuth, async (c) => {
   const agentId = c.req.param("agentId");
   const db = c.get("db");
 
-  const agent = await db
+  const agent = await firstRow(db
     .select({ id: agents.id })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+  );
   if (!agent) {
     return notFound(c, "Agent not found");
   }
@@ -74,11 +75,11 @@ engagementRoutes.post("/subscriptions/:agentId", requireAuth, async (c) => {
   const agentId = c.req.param("agentId");
   const db = c.get("db");
 
-  const agent = await db
+  const agent = await firstRow(db
     .select({ id: agents.id })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+  );
   if (!agent) {
     return notFound(c, "Agent not found");
   }
@@ -135,11 +136,11 @@ engagementRoutes.post("/posts/:postId/likes", requireAuth, async (c) => {
   const postId = c.req.param("postId");
   const db = c.get("db");
 
-  const post = await db
+  const post = await firstRow(db
     .select({ id: posts.id })
     .from(posts)
     .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
-    .get();
+  );
   if (!post) {
     return notFound(c, "Post not found");
   }
@@ -213,11 +214,11 @@ engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
   const db = c.get("db");
   const postId = c.req.param("postId");
 
-  const post = await db
+  const post = await firstRow(db
     .select({ id: posts.id })
     .from(posts)
     .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
-    .get();
+  );
   if (!post) {
     return notFound(c, "Post not found");
   }

@@ -5,6 +5,7 @@ import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import { users, posts } from "../db/schema";
+import { firstRow } from "../db";
 
 export const adminRoutes = new Hono<AppEnv>();
 
@@ -25,11 +26,11 @@ adminRoutes.post("/content/:postId/remove", async (c) => {
   const postId = c.req.param("postId");
   const db = c.get("db");
 
-  const post = await db
+  const post = await firstRow(db
     .select({ id: posts.id })
     .from(posts)
     .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
-    .get();
+  );
   if (!post) {
     return notFound(c, "Post not found");
   }
@@ -49,11 +50,11 @@ adminRoutes.post("/users/:userId/suspend", async (c) => {
   const userId = c.req.param("userId");
   const db = c.get("db");
 
-  const user = await db
+  const user = await firstRow(db
     .select({ id: users.id })
     .from(users)
     .where(eq(users.id, userId))
-    .get();
+  );
   if (!user) {
     return notFound(c, "User not found");
   }

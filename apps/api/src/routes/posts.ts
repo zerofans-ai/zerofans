@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { eq, sql, and, desc, isNull } from "drizzle-orm";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
+import { firstRow } from "../db";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { scoreFeedItem } from "../lib/feed-score";
 import { hashContent, signContent, decryptPrivateKey } from "../lib/signing";
@@ -44,11 +45,11 @@ async function getAgentOwner(
   db: ReturnType<typeof import("../db")["createDb"]>,
   agentId: string,
 ): Promise<{ ownerUserId: string } | null> {
-  const row = await db
+  const row = await firstRow(db
     .select({ ownerUserId: agents.ownerUserId })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+  );
   return row ?? null;
 }
 
@@ -86,11 +87,11 @@ postsRoutes.post("/", requireAuth, async (c) => {
 
   if (signingSecret) {
     contentHash = await hashContent(bodyText);
-    const agent = await db
+    const agent = await firstRow(db
       .select({ privateKeyEncrypted: agents.privateKeyEncrypted })
       .from(agents)
       .where(eq(agents.id, parsed.data.agentId))
-      .get();
+    );
     if (agent?.privateKeyEncrypted) {
       const privateKey = await decryptPrivateKey(agent.privateKeyEncrypted, signingSecret);
       signature = await signContent(privateKey, contentHash);
@@ -127,7 +128,7 @@ postsRoutes.patch("/:postId", requireAuth, async (c) => {
   const db = c.get("db");
   const postId = c.req.param("postId");
 
-  const post = await db
+  const post = await firstRow(db
     .select({
       id: posts.id,
       agentId: posts.agentId,
@@ -139,7 +140,7 @@ postsRoutes.patch("/:postId", requireAuth, async (c) => {
     .from(posts)
     .innerJoin(agents, eq(agents.id, posts.agentId))
     .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
-    .get();
+  );
 
   if (!post) {
     return notFound(c, "Post not found");
@@ -184,7 +185,7 @@ postsRoutes.delete("/:postId", requireAuth, async (c) => {
   const db = c.get("db");
   const postId = c.req.param("postId");
 
-  const post = await db
+  const post = await firstRow(db
     .select({
       id: posts.id,
       ownerUserId: agents.ownerUserId,
@@ -192,7 +193,7 @@ postsRoutes.delete("/:postId", requireAuth, async (c) => {
     .from(posts)
     .innerJoin(agents, eq(agents.id, posts.agentId))
     .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
-    .get();
+  );
 
   if (!post) {
     return notFound(c, "Post not found");
@@ -230,11 +231,11 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
       return unauthorized(c, "Authentication required for agent feed mode");
     }
 
-    const actor = await db
+    const actor = await firstRow(db
       .select({ id: agents.id, ownerUserId: agents.ownerUserId })
       .from(agents)
       .where(eq(agents.id, actingAgentId))
-      .get();
+    );
 
     if (!actor) {
       return notFound(c, "Acting agent not found");
@@ -357,7 +358,7 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
       (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes_count,
       (SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id) AS comments_count,
       (CASE
-        WHEN ${authUserId} IS NULL THEN false
+        WHEN ${authUserId}::text IS NULL THEN false
         WHEN EXISTS (
           SELECT 1 FROM follows f
           WHERE f.user_id = ${authUserId} AND f.agent_id = p.agent_id
@@ -365,7 +366,7 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
         ELSE false
       END) AS is_followed_agent,
       (CASE
-        WHEN ${authUserId} IS NULL THEN false
+        WHEN ${authUserId}::text IS NULL THEN false
         WHEN EXISTS (
           SELECT 1 FROM subscriptions s2
           WHERE s2.user_id = ${authUserId}
@@ -381,7 +382,7 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
       AND (
         p.visibility = 'public'
         OR (
-          ${authUserId} IS NOT NULL
+          ${authUserId}::text IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM subscriptions s
             WHERE s.user_id = ${authUserId}
@@ -447,7 +448,7 @@ postsRoutes.get("/:postId", optionalAuth, async (c) => {
       (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes_count,
       (SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id) AS comments_count,
       (CASE
-        WHEN ${authUserId} IS NULL THEN false
+        WHEN ${authUserId}::text IS NULL THEN false
         WHEN EXISTS (
           SELECT 1 FROM follows f
           WHERE f.user_id = ${authUserId} AND f.agent_id = p.agent_id
@@ -455,7 +456,7 @@ postsRoutes.get("/:postId", optionalAuth, async (c) => {
         ELSE false
       END) AS is_followed_agent,
       (CASE
-        WHEN ${authUserId} IS NULL THEN false
+        WHEN ${authUserId}::text IS NULL THEN false
         WHEN EXISTS (
           SELECT 1 FROM subscriptions s
           WHERE s.user_id = ${authUserId}
@@ -526,7 +527,7 @@ postsRoutes.get("/agents/:agentId/posts", optionalAuth, async (c) => {
     if (authUser.role === "admin" || authUser.id === owner.ownerUserId) {
       canSeeSubscriberPosts = true;
     } else {
-      const subscription = await db
+      const subscription = await firstRow(db
         .select({ id: subscriptions.id })
         .from(subscriptions)
         .where(
@@ -536,7 +537,7 @@ postsRoutes.get("/agents/:agentId/posts", optionalAuth, async (c) => {
             eq(subscriptions.status, "active"),
           ),
         )
-        .get();
+      );
       canSeeSubscriberPosts = Boolean(subscription);
     }
   }

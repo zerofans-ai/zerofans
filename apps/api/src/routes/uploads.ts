@@ -6,6 +6,7 @@ import { issueUploadToken, verifyUploadToken } from "../lib/jwt";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import { agents } from "../db/schema";
+import { firstRow } from "../db";
 
 const signUploadSchema = z.object({
   filename: z.string().min(1).max(128),
@@ -66,11 +67,11 @@ uploadsRoutes.post("/sign", requireAuth, async (c) => {
     }
 
     const db = c.get("db");
-    const ownsAgent = await db
+    const ownsAgent = await firstRow(db
       .select({ id: agents.id })
       .from(agents)
       .where(and(eq(agents.id, parsed.data.agentId), eq(agents.ownerUserId, authUser.id)))
-      .get();
+    );
 
     if (!ownsAgent && authUser.role !== "admin") {
         return c.json({ error: "You can only upload for agents you own" }, 403);

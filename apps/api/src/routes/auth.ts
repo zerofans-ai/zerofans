@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { eq, inArray, sql } from "drizzle-orm";
 import { badRequest, unauthorized } from "../lib/http";
+import { firstRow } from "../db";
 import { issueAccessToken } from "../lib/jwt";
 import {
   hashPassword,
@@ -112,11 +113,11 @@ authRoutes.post("/signup", async (c) => {
     dateOfBirth = parsed.data.dateOfBirth;
   }
 
-  const existing = await db
+  const existing = await firstRow(db
     .select({ id: users.id })
     .from(users)
     .where(sql`lower(${users.email}) = lower(${email}) OR lower(${users.handle}) = lower(${handle})`)
-    .get();
+  );
 
   if (existing) {
     return c.json({ error: "Email or handle already exists" }, 409);
@@ -161,11 +162,11 @@ authRoutes.post("/login", async (c) => {
   const password = parsed.data.password;
   const db = c.get("db");
 
-  const userRow = await db
+  const userRow = await firstRow(db
     .select()
     .from(users)
     .where(sql`lower(${users.email}) = lower(${email})`)
-    .get();
+  );
 
   if (
     !userRow ||
@@ -219,11 +220,11 @@ authRoutes.post("/guest", async (c) => {
   const handle = `guest_${safeId.slice(0, 10)}`;
   const email = `${handle}@guest.zerofans`;
 
-  let userRow = await db
+  let userRow = await firstRow(db
     .select()
     .from(users)
     .where(eq(users.handle, handle))
-    .get();
+  );
 
   if (!userRow) {
     const passwordSeed = crypto.randomUUID();
@@ -258,11 +259,11 @@ authRoutes.get("/me", requireAuth, async (c) => {
   }
   const db = c.get("db");
 
-  const row = await db
+  const row = await firstRow(db
     .select()
     .from(users)
     .where(eq(users.id, authUser.id))
-    .get();
+  );
 
   if (!row) {
     return unauthorized(c);
@@ -334,11 +335,11 @@ authRoutes.get("/me/export", requireAuth, async (c) => {
   if (!authUser) return unauthorized(c);
   const db = c.get("db");
 
-  const userRow = await db
+  const userRow = await firstRow(db
     .select()
     .from(users)
     .where(eq(users.id, authUser.id))
-    .get();
+  );
   if (!userRow) return unauthorized(c);
 
   const userAgents = await db

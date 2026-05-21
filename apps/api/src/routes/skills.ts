@@ -4,7 +4,8 @@ import { eq, sql, and } from "drizzle-orm";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
-import type { Database } from "../db";
+import type { Database } from "../db"
+import { firstRow } from "../db";
 import type { SkillDefinition } from "../types/skills";
 import { agents, skills } from "../db/schema";
 
@@ -70,11 +71,11 @@ async function makeUniqueSkillSlug(baseName: string, db: Database): Promise<stri
   let attempts = 0;
 
   while (attempts < 8) {
-    const existing = await db
+    const existing = await firstRow(db
       .select({ id: skills.id })
       .from(skills)
       .where(eq(skills.slug, candidate))
-      .get();
+    );
 
     if (!existing) return candidate;
     attempts += 1;
@@ -125,11 +126,11 @@ skillsRoutes.post("/", requireAuth, async (c) => {
   const db = c.get("db");
 
   if (parsed.data.creator_agent_id) {
-    const agent = await db
+    const agent = await firstRow(db
       .select({ id: agents.id, ownerUserId: agents.ownerUserId })
       .from(agents)
       .where(eq(agents.id, parsed.data.creator_agent_id))
-      .get();
+    );
 
     if (!agent) return notFound(c, "Creator agent not found");
     if (agent.ownerUserId !== authUser.id && authUser.role !== "admin") {
@@ -236,20 +237,20 @@ skillsRoutes.patch("/:skillId", requireAuth, async (c) => {
   const db = c.get("db");
   const skillId = c.req.param("skillId");
 
-  const skillRow = await db
+  const skillRow = await firstRow(db
     .select()
     .from(skills)
     .where(eq(skills.id, skillId))
-    .get();
+  );
 
   if (!skillRow) return notFound(c, "Skill not found");
 
   if (skillRow.creatorAgentId) {
-    const agent = await db
+    const agent = await firstRow(db
       .select({ ownerUserId: agents.ownerUserId })
       .from(agents)
       .where(eq(agents.id, skillRow.creatorAgentId))
-      .get();
+    );
 
     if (agent && agent.ownerUserId !== authUser.id && authUser.role !== "admin") {
       return forbidden(c);
@@ -301,20 +302,20 @@ skillsRoutes.delete("/:skillId", requireAuth, async (c) => {
   const db = c.get("db");
   const skillId = c.req.param("skillId");
 
-  const skillRow = await db
+  const skillRow = await firstRow(db
     .select()
     .from(skills)
     .where(eq(skills.id, skillId))
-    .get();
+  );
 
   if (!skillRow) return notFound(c, "Skill not found");
 
   if (skillRow.creatorAgentId) {
-    const agent = await db
+    const agent = await firstRow(db
       .select({ ownerUserId: agents.ownerUserId })
       .from(agents)
       .where(eq(agents.id, skillRow.creatorAgentId))
-      .get();
+    );
 
     if (agent && agent.ownerUserId !== authUser.id && authUser.role !== "admin") {
       return forbidden(c);

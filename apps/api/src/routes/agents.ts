@@ -10,7 +10,8 @@ import { generateKeyPair, encryptPrivateKey } from "../lib/signing";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import type { SkillDefinition } from "../types/skills";
-import type { Database } from "../db";
+import type { Database } from "../db"
+import { firstRow } from "../db";
 import {
   agents,
   posts,
@@ -85,14 +86,14 @@ async function ensureOwnedAgent(
   }
 
   const db = c.get("db");
-  const agent = await db
+  const agent = await firstRow(db
     .select({
       id: agents.id,
       ownerUserId: agents.ownerUserId,
     })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+  );
 
   if (!agent) {
     return null;
@@ -225,14 +226,14 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
   const db = c.get("db");
   const agentId = c.req.param("agentId");
 
-  const agent = await db
+  const agent = await firstRow(db
     .select({
       id: agents.id,
       ownerUserId: agents.ownerUserId,
     })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+  );
 
   if (!agent) {
     return notFound(c, "Agent not found");
@@ -298,8 +299,7 @@ agentsRoutes.get("/mine", requireAuth, async (c) => {
     })
     .from(agents)
     .where(eq(agents.ownerUserId, authUser.id))
-    .orderBy(desc(agents.createdAt))
-    .all();
+    .orderBy(desc(agents.createdAt));
 
   return c.json({ items: rows });
 });
@@ -320,13 +320,13 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
 
   const orderByClause =
     sort === "newest"
-      ? sql`a.created_at DESC`
+      ? sql`sub.created_at DESC`
       : sort === "most-followers"
-        ? sql`(followers_count + agent_followers_count) DESC, a.created_at DESC`
+        ? sql`(sub.followers_count + sub.agent_followers_count) DESC, sub.created_at DESC`
         : sort === "most-posts"
-          ? sql`posts_count DESC, a.created_at DESC`
+          ? sql`sub.posts_count DESC, sub.created_at DESC`
           : // popular: weighted score
-            sql`(followers_count * 2 + subscribers_count * 3 + agent_followers_count + posts_count) DESC, a.created_at DESC`;
+            sql`(sub.followers_count * 2 + sub.subscribers_count * 3 + sub.agent_followers_count + sub.posts_count) DESC, sub.created_at DESC`;
 
   const db = c.get("db");
   const rows = await db.execute<{
@@ -345,40 +345,43 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
     agent_followers_count: number;
     posts_count: number;
   }>(sql`
-    SELECT
-      a.id,
-      a.name,
-      a.slug,
-      a.bio,
-      a.avatar_url,
-      a.banner_url,
-      a.personality_tags_json,
-      a.skills_json,
-      a.cli_tools_json,
-      a.socials_json,
-      (
-        SELECT COUNT(*) FROM follows f
-        WHERE f.agent_id = a.id
-      ) AS followers_count,
-      (
-        SELECT COUNT(*) FROM subscriptions s
-        WHERE s.agent_id = a.id AND s.status = 'active'
-      ) AS subscribers_count,
-      (
-        SELECT COUNT(*) FROM agent_relationships ar
-        WHERE ar.target_agent_id = a.id
-          AND ar.relationship_type = 'follow'
-          AND ar.status = 'active'
-      ) AS agent_followers_count,
-      (
-        SELECT COUNT(*) FROM posts p
-        WHERE p.agent_id = a.id
-          AND p.deleted_at IS NULL
-      ) AS posts_count
-     FROM agents a
-     WHERE (${query} = '%%' OR lower(a.name) LIKE ${query} OR lower(COALESCE(a.bio, '')) LIKE ${query})
-     ORDER BY ${orderByClause}
-     LIMIT ${limit}
+    SELECT sub.* FROM (
+      SELECT
+        a.id,
+        a.name,
+        a.slug,
+        a.bio,
+        a.avatar_url,
+        a.banner_url,
+        a.personality_tags_json,
+        a.skills_json,
+        a.cli_tools_json,
+        a.socials_json,
+        a.created_at,
+        (
+          SELECT COUNT(*) FROM follows f
+          WHERE f.agent_id = a.id
+        ) AS followers_count,
+        (
+          SELECT COUNT(*) FROM subscriptions s
+          WHERE s.agent_id = a.id AND s.status = 'active'
+        ) AS subscribers_count,
+        (
+          SELECT COUNT(*) FROM agent_relationships ar
+          WHERE ar.target_agent_id = a.id
+            AND ar.relationship_type = 'follow'
+            AND ar.status = 'active'
+        ) AS agent_followers_count,
+        (
+          SELECT COUNT(*) FROM posts p
+          WHERE p.agent_id = a.id
+            AND p.deleted_at IS NULL
+        ) AS posts_count
+       FROM agents a
+       WHERE (${query} = '%%' OR lower(a.name) LIKE ${query} OR lower(COALESCE(a.bio, '')) LIKE ${query})
+    ) sub
+    ORDER BY ${orderByClause}
+    LIMIT ${limit}
   `);
 
   return c.json({
@@ -425,8 +428,7 @@ agentsRoutes.get("/:agentId/network", requireAuth, async (c) => {
     .from(agentRelationships)
     .innerJoin(agents, eq(agents.id, agentRelationships.targetAgentId))
     .where(eq(agentRelationships.sourceAgentId, agentId))
-    .orderBy(desc(agentRelationships.updatedAt))
-    .all();
+    .orderBy(desc(agentRelationships.updatedAt));
 
   return c.json({ items: rows });
 });
@@ -445,11 +447,11 @@ agentsRoutes.post("/:agentId/network/follows/:targetAgentId", requireAuth, async
   }
 
   const db = c.get("db");
-  const targetAgent = await db
+  const targetAgent = await firstRow(db
     .select({ id: agents.id })
     .from(agents)
     .where(eq(agents.id, targetAgentId))
-    .get();
+  );
   if (!targetAgent) {
     return notFound(c, "Target agent not found");
   }
@@ -510,11 +512,11 @@ agentsRoutes.post(
     }
 
     const db = c.get("db");
-    const targetAgent = await db
+    const targetAgent = await firstRow(db
       .select({ id: agents.id })
       .from(agents)
       .where(eq(agents.id, targetAgentId))
-      .get();
+    );
     if (!targetAgent) {
       return notFound(c, "Target agent not found");
     }
@@ -585,11 +587,11 @@ agentsRoutes.post("/:agentId/skills", requireAuth, async (c) => {
   if (!parsed.success) return badRequest(c, "Invalid equip payload");
 
   const db = c.get("db");
-  const skill = await db
+  const skill = await firstRow(db
     .select({ id: skills.id })
     .from(skills)
     .where(and(eq(skills.id, parsed.data.skill_id), eq(skills.enabled, true)))
-    .get();
+  );
   if (!skill) return notFound(c, "Skill not found");
 
   const configOverridesJson = parsed.data.config_overrides
@@ -611,11 +613,11 @@ agentsRoutes.get("/:agentId/skills", optionalAuth, async (c) => {
   const agentId = c.req.param("agentId");
   const db = c.get("db");
 
-  const agent = await db
+  const agent = await firstRow(db
     .select({ id: agents.id })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+  );
   if (!agent) return notFound(c, "Agent not found");
 
   const rows = await db
@@ -640,8 +642,7 @@ agentsRoutes.get("/:agentId/skills", optionalAuth, async (c) => {
         eq(skills.enabled, true),
       ),
     )
-    .orderBy(desc(agentSkills.equippedAt))
-    .all();
+    .orderBy(desc(agentSkills.equippedAt));
 
   return c.json({
     items: rows.map((r) => ({
@@ -720,7 +721,7 @@ agentsRoutes.post("/:agentId/skills/:skillId/execute", requireAuth, async (c) =>
   const skillId = c.req.param("skillId");
   const db = c.get("db");
 
-  const equipped = await db
+  const equipped = await firstRow(db
     .select({ skill_id: agentSkills.skillId })
     .from(agentSkills)
     .where(
@@ -730,7 +731,7 @@ agentsRoutes.post("/:agentId/skills/:skillId/execute", requireAuth, async (c) =>
         eq(agentSkills.enabled, true),
       ),
     )
-    .get();
+  );
 
   if (!equipped) return badRequest(c, "Skill is not equipped on this agent");
 
@@ -739,11 +740,11 @@ agentsRoutes.post("/:agentId/skills/:skillId/execute", requireAuth, async (c) =>
     return c.json({ error: "Rate limit exceeded: 60 executions per hour" }, 429);
   }
 
-  const skill = await db
+  const skill = await firstRow(db
     .select()
     .from(skills)
     .where(and(eq(skills.id, skillId), eq(skills.enabled, true)))
-    .get();
+  );
 
   if (!skill) return notFound(c, "Skill not found");
 
@@ -785,8 +786,7 @@ agentsRoutes.get("/:agentId/skills/logs", requireAuth, async (c) => {
     .from(skillExecutionLogs)
     .where(eq(skillExecutionLogs.agentId, ownedAgent.id))
     .orderBy(desc(skillExecutionLogs.createdAt))
-    .limit(50)
-    .all();
+    .limit(50);
 
   return c.json({ items: rows });
 });
@@ -795,11 +795,11 @@ agentsRoutes.get("/:agentId/stats", async (c) => {
   const agentId = c.req.param("agentId");
   const db = c.get("db");
 
-  const agent = await db
+  const agent = await firstRow(db
     .select({ id: agents.id })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+  );
   if (!agent) {
     return notFound(c, "Agent not found");
   }
@@ -847,11 +847,11 @@ agentsRoutes.get("/:agentId/posts", optionalAuth, async (c) => {
   const agentId = c.req.param("agentId");
   const db = c.get("db");
 
-  const owner = await db
+  const owner = await firstRow(db
     .select({ owner_user_id: agents.ownerUserId })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+  );
   if (!owner) {
     return notFound(c, "Agent not found");
   }
@@ -861,7 +861,7 @@ agentsRoutes.get("/:agentId/posts", optionalAuth, async (c) => {
     if (authUser.role === "admin" || authUser.id === owner.owner_user_id) {
       canSeeSubscriberPosts = true;
     } else {
-      const subscription = await db
+      const subscription = await firstRow(db
         .select({ id: subscriptions.id })
         .from(subscriptions)
         .where(
@@ -871,7 +871,7 @@ agentsRoutes.get("/:agentId/posts", optionalAuth, async (c) => {
             eq(subscriptions.status, "active"),
           ),
         )
-        .get();
+      );
       canSeeSubscriberPosts = Boolean(subscription);
     }
   }
@@ -899,8 +899,7 @@ agentsRoutes.get("/:agentId/posts", optionalAuth, async (c) => {
       ),
     )
     .orderBy(desc(posts.createdAt))
-    .limit(50)
-    .all();
+    .limit(50);
 
   return c.json({ items: postsResult });
 });
@@ -910,7 +909,7 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
   const authUser = c.get("authUser");
   const db = c.get("db");
 
-  const agent = await db
+  const agent = await firstRow(db
     .select({
       id: agents.id,
       owner_user_id: agents.ownerUserId,
@@ -927,7 +926,7 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
     })
     .from(agents)
     .where(eq(agents.slug, slug))
-    .get();
+  );
 
   if (!agent) {
     return notFound(c, "Agent not found");
@@ -941,14 +940,14 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
       canSeeSubscriberPosts = true;
     } else {
       const [followRow, subscriptionRow] = await Promise.all([
-        db
+        firstRow(db
           .select({ id: follows.id })
           .from(follows)
           .where(
             and(eq(follows.userId, authUser.id), eq(follows.agentId, agent.id)),
           )
-          .get(),
-        db
+        ),
+        firstRow(db
           .select({ id: subscriptions.id })
           .from(subscriptions)
           .where(
@@ -958,7 +957,7 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
               eq(subscriptions.status, "active"),
             ),
           )
-          .get(),
+        ),
       ]);
       isFollowed = Boolean(followRow);
       isSubscribed = Boolean(subscriptionRow);
@@ -1017,8 +1016,7 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
         eq(skills.enabled, true),
       ),
     )
-    .orderBy(desc(agentSkills.equippedAt))
-    .all();
+    .orderBy(desc(agentSkills.equippedAt));
 
   return c.json({
     agent: {
