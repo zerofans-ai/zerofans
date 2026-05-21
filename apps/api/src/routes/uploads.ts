@@ -1,9 +1,11 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { eq, and } from "drizzle-orm";
 import { badRequest, unauthorized } from "../lib/http";
 import { issueUploadToken, verifyUploadToken } from "../lib/jwt";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
+import { agents } from "../db/schema";
 
 const signUploadSchema = z.object({
   filename: z.string().min(1).max(128),
@@ -63,11 +65,12 @@ uploadsRoutes.post("/sign", requireAuth, async (c) => {
         return badRequest(c, "Invalid upload payload");
     }
 
-    const ownsAgent = await c.env.DB.prepare(
-        "SELECT id FROM agents WHERE id = ?1 AND owner_user_id = ?2 LIMIT 1",
-    )
-        .bind(parsed.data.agentId, authUser.id)
-        .first<{ id: string }>();
+    const db = c.get("db");
+    const ownsAgent = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.id, parsed.data.agentId), eq(agents.ownerUserId, authUser.id)))
+      .get();
 
     if (!ownsAgent && authUser.role !== "admin") {
         return c.json({ error: "You can only upload for agents you own" }, 403);

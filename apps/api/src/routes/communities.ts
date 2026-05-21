@@ -1,10 +1,25 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
+import { eq, sql, and, isNull, desc, count } from "drizzle-orm";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
+import type { Database } from "../db";
+import {
+  agents,
+  posts,
+  comments,
+  likes,
+  follows,
+  subscriptions,
+  agentRelationships,
+  agentCommunities,
+  communityMembers,
+  communityMessages,
+  users,
+} from "../db/schema";
 
 const RESERVED_PATHS = new Set(["discover", "mine", "id"]);
 const coverImageUrlSchema = z
@@ -75,15 +90,16 @@ function validateCommunityPathOrNull(pathValue: string | undefined): string | nu
   return slug;
 }
 
-async function makeUniquePath(base: string, db: D1Database): Promise<string> {
+async function makeUniquePath(base: string, db: Database): Promise<string> {
   const baseSlug = validateCommunityPathOrNull(base) ?? "community";
   let candidate = baseSlug;
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const existing = await db
-      .prepare("SELECT id FROM agent_communities WHERE path = ?1 LIMIT 1")
-      .bind(candidate)
-      .first<{ id: string }>();
+      .select({ id: agentCommunities.id })
+      .from(agentCommunities)
+      .where(eq(agentCommunities.path, candidate))
+      .get();
 
     if (!existing) {
       return candidate;
@@ -101,7 +117,7 @@ async function ensureOwnedAgent(
 ): Promise<
   | {
       id: string;
-      owner_user_id: string;
+      ownerUserId: string;
       name: string;
       slug: string;
     }
@@ -112,17 +128,23 @@ async function ensureOwnedAgent(
     return null;
   }
 
-  const agent = await c.env.DB.prepare(
-    "SELECT id, owner_user_id, name, slug FROM agents WHERE id = ?1 LIMIT 1",
-  )
-    .bind(agentId)
-    .first<{ id: string; owner_user_id: string; name: string; slug: string }>();
+  const db = c.get("db");
+  const agent = await db
+    .select({
+      id: agents.id,
+      ownerUserId: agents.ownerUserId,
+      name: agents.name,
+      slug: agents.slug,
+    })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .get();
 
   if (!agent) {
     return null;
   }
 
-  if (authUser.role === "admin" || authUser.id === agent.owner_user_id) {
+  if (authUser.role === "admin" || authUser.id === agent.ownerUserId) {
     return agent;
   }
 
@@ -143,11 +165,14 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
     return badRequest(c, "Invalid community payload");
   }
 
+  const db = c.get("db");
   const ownedAgent = await ensureOwnedAgent(c, parsed.data.agentId);
   if (!ownedAgent) {
-    const agentExists = await c.env.DB.prepare("SELECT id FROM agents WHERE id = ?1 LIMIT 1")
-      .bind(parsed.data.agentId)
-      .first<{ id: string }>();
+    const agentExists = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(eq(agents.id, parsed.data.agentId))
+      .get();
 
     if (!agentExists) {
       return notFound(c, "Agent not found");
@@ -155,11 +180,11 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
     return forbidden(c, "You can only create communities for your own agents");
   }
 
-  const existingForAgent = await c.env.DB.prepare(
-    "SELECT id, path FROM agent_communities WHERE agent_id = ?1 LIMIT 1",
-  )
-    .bind(ownedAgent.id)
-    .first<{ id: string; path: string }>();
+  const existingForAgent = await db
+    .select({ id: agentCommunities.id, path: agentCommunities.path })
+    .from(agentCommunities)
+    .where(eq(agentCommunities.agentId, ownedAgent.id))
+    .get();
   if (existingForAgent) {
     return c.json(
       {
@@ -181,13 +206,13 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
 
   let path = requestedPath;
   if (!path) {
-    path = await makeUniquePath(`${parsed.data.name}-${ownedAgent.slug}`, c.env.DB);
+    path = await makeUniquePath(`${parsed.data.name}-${ownedAgent.slug}`, db);
   } else {
-    const duplicate = await c.env.DB.prepare(
-      "SELECT id FROM agent_communities WHERE path = ?1 LIMIT 1",
-    )
-      .bind(path)
-      .first<{ id: string }>();
+    const duplicate = await db
+      .select({ id: agentCommunities.id })
+      .from(agentCommunities)
+      .where(eq(agentCommunities.path, path))
+      .get();
     if (duplicate) {
       return c.json({ error: "Community path already exists" }, 409);
     }
@@ -199,13 +224,15 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
   const coverImageUrl = parsed.data.coverImageUrl ?? null;
   const rules = JSON.stringify(parsed.data.rules ?? []);
 
-  await c.env.DB.prepare(
-    `INSERT INTO agent_communities (
-      id, agent_id, name, path, description, cover_image_url, rules_json, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), datetime('now'))`,
-  )
-    .bind(id, ownedAgent.id, name, path, description, coverImageUrl, rules)
-    .run();
+  await db.insert(agentCommunities).values({
+    id,
+    agentId: ownedAgent.id,
+    name,
+    path,
+    description,
+    coverImageUrl,
+    rulesJson: rules,
+  });
 
   return c.json({
     community: {
@@ -232,32 +259,33 @@ communitiesRoutes.patch("/id/:communityId", requireAuth, async (c) => {
     return badRequest(c, "Invalid community update payload");
   }
 
+  const db = c.get("db");
   const communityId = c.req.param("communityId");
-  const existing = await c.env.DB.prepare(
-    `SELECT c.id, c.agent_id, a.owner_user_id
-     FROM agent_communities c
-     JOIN agents a ON a.id = c.agent_id
-     WHERE c.id = ?1
-     LIMIT 1`,
-  )
-    .bind(communityId)
-    .first<{ id: string; agent_id: string; owner_user_id: string }>();
+
+  const existing = await db
+    .select({
+      id: agentCommunities.id,
+      agentId: agentCommunities.agentId,
+      ownerUserId: agents.ownerUserId,
+    })
+    .from(agentCommunities)
+    .innerJoin(agents, eq(agents.id, agentCommunities.agentId))
+    .where(eq(agentCommunities.id, communityId))
+    .get();
 
   if (!existing) {
     return notFound(c, "Community not found");
   }
 
-  const canEdit = authUser.role === "admin" || authUser.id === existing.owner_user_id;
+  const canEdit = authUser.role === "admin" || authUser.id === existing.ownerUserId;
   if (!canEdit) {
     return forbidden(c);
   }
 
-  const updates: string[] = [];
-  const values: (string | null)[] = [];
+  const updates: Partial<typeof agentCommunities.$inferInsert> = {};
 
   if (parsed.data.name !== undefined) {
-    updates.push("name = ?");
-    values.push(parsed.data.name.trim());
+    updates.name = parsed.data.name.trim();
   }
 
   if (parsed.data.path !== undefined) {
@@ -269,77 +297,71 @@ communitiesRoutes.patch("/id/:communityId", requireAuth, async (c) => {
       );
     }
 
-    const duplicate = await c.env.DB.prepare(
-      "SELECT id FROM agent_communities WHERE path = ?1 AND id != ?2 LIMIT 1",
-    )
-      .bind(path, existing.id)
-      .first<{ id: string }>();
+    const duplicate = await db
+      .select({ id: agentCommunities.id })
+      .from(agentCommunities)
+      .where(
+        and(eq(agentCommunities.path, path), sql`${agentCommunities.id} != ${existing.id}`),
+      )
+      .get();
     if (duplicate) {
       return c.json({ error: "Community path already exists" }, 409);
     }
 
-    updates.push("path = ?");
-    values.push(path);
+    updates.path = path;
   }
 
   if (parsed.data.description !== undefined) {
-    updates.push("description = ?");
-    values.push(parsed.data.description?.trim() ?? null);
+    updates.description = parsed.data.description?.trim() ?? null;
   }
 
   if (parsed.data.coverImageUrl !== undefined) {
-    updates.push("cover_image_url = ?");
-    values.push(parsed.data.coverImageUrl);
+    updates.coverImageUrl = parsed.data.coverImageUrl;
   }
 
   if (parsed.data.rules !== undefined) {
-    updates.push("rules_json = ?");
-    values.push(JSON.stringify(parsed.data.rules));
+    updates.rulesJson = JSON.stringify(parsed.data.rules);
   }
 
-  if (updates.length === 0) {
+  if (Object.keys(updates).length === 0) {
     return badRequest(c, "No fields to update");
   }
 
-  updates.push("updated_at = datetime('now')");
+  updates.updatedAt = sql`now()`;
 
-  await c.env.DB.prepare(
-    `UPDATE agent_communities SET ${updates.join(", ")} WHERE id = ?`,
-  )
-    .bind(...values, existing.id)
-    .run();
+  await db
+    .update(agentCommunities)
+    .set(updates)
+    .where(eq(agentCommunities.id, existing.id));
 
-  const updated = await c.env.DB.prepare(
-    `SELECT id, agent_id, name, path, description, cover_image_url, rules_json, created_at, updated_at
-     FROM agent_communities
-     WHERE id = ?1
-     LIMIT 1`,
-  )
-    .bind(existing.id)
-    .first<{
-      id: string;
-      agent_id: string;
-      name: string;
-      path: string;
-      description: string | null;
-      cover_image_url: string | null;
-      rules_json: string | null;
-      created_at: string;
-      updated_at: string;
-    }>();
+  const updated = await db
+    .select({
+      id: agentCommunities.id,
+      agentId: agentCommunities.agentId,
+      name: agentCommunities.name,
+      path: agentCommunities.path,
+      description: agentCommunities.description,
+      coverImageUrl: agentCommunities.coverImageUrl,
+      rulesJson: agentCommunities.rulesJson,
+      createdAt: agentCommunities.createdAt,
+      updatedAt: agentCommunities.updatedAt,
+    })
+    .from(agentCommunities)
+    .where(eq(agentCommunities.id, existing.id))
+    .get();
 
   return c.json({
     community: updated
       ? {
           id: updated.id,
-          agentId: updated.agent_id,
+          agentId: updated.agentId,
           name: updated.name,
           path: updated.path,
           description: updated.description,
-          coverImageUrl: updated.cover_image_url,
-          rules: parseRules(updated.rules_json),
-          createdAt: updated.created_at,
-          updatedAt: updated.updated_at,
+          coverImageUrl: updated.coverImageUrl,
+          rules: parseRules(updated.rulesJson),
+          createdAt: updated.createdAt,
+          updatedAt: updated.updatedAt,
         }
       : null,
   });
@@ -351,8 +373,9 @@ communitiesRoutes.get("/mine", requireAuth, async (c) => {
     return unauthorized(c);
   }
 
-  const rows = await c.env.DB.prepare(
-    `SELECT
+  const db = c.get("db");
+  const rows = await db.execute(sql`
+    SELECT
       c.id,
       c.agent_id,
       c.name,
@@ -363,35 +386,22 @@ communitiesRoutes.get("/mine", requireAuth, async (c) => {
       c.created_at,
       a.name AS agent_name,
       a.slug AS agent_slug
-     FROM agent_communities c
-     JOIN agents a ON a.id = c.agent_id
-     WHERE (?1 = 'admin' OR a.owner_user_id = ?2)
-     ORDER BY c.created_at DESC
-     LIMIT 100`,
-  )
-    .bind(authUser.role, authUser.id)
-    .all<{
-      id: string;
-      agent_id: string;
-      name: string;
-      path: string;
-      description: string | null;
-      cover_image_url: string | null;
-      rules_json: string | null;
-      created_at: string;
-      agent_name: string;
-      agent_slug: string;
-    }>();
+    FROM agent_communities c
+    JOIN agents a ON a.id = c.agent_id
+    WHERE (${authUser.role} = 'admin' OR a.owner_user_id = ${authUser.id})
+    ORDER BY c.created_at DESC
+    LIMIT 100
+  `);
 
   return c.json({
-    items: rows.results.map((row) => ({
+    items: rows.rows.map((row: Record<string, unknown>) => ({
       id: row.id,
       agentId: row.agent_id,
       name: row.name,
       path: row.path,
       description: row.description,
       coverImageUrl: row.cover_image_url,
-      rules: parseRules(row.rules_json),
+      rules: parseRules(row.rules_json as string | null),
       createdAt: row.created_at,
       agent: {
         name: row.agent_name,
@@ -415,18 +425,20 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
   const limit = parsed.data.limit ?? 24;
   const sort = parsed.data.sort ?? "popular";
 
+  const db = c.get("db");
+
   const orderByClause =
     sort === "newest"
-      ? "c.created_at DESC"
+      ? sql`c.created_at DESC`
       : sort === "most-members"
-        ? "members_count DESC, c.created_at DESC"
+        ? sql`members_count DESC, c.created_at DESC`
         : sort === "most-posts"
-          ? "posts_count DESC, c.created_at DESC"
+          ? sql`posts_count DESC, c.created_at DESC`
           : // popular: weighted score
-            "(members_count * 3 + posts_count * 2 + agent_followers_count) DESC, c.created_at DESC";
+            sql`(members_count * 3 + posts_count * 2 + agent_followers_count) DESC, c.created_at DESC`;
 
-  const rows = await c.env.DB.prepare(
-    `SELECT
+  const rows = await db.execute(sql`
+    SELECT
       c.id,
       c.agent_id,
       c.name,
@@ -441,72 +453,46 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
       a.personality_tags_json AS agent_personality_tags_json,
       a.skills_json AS agent_skills_json,
       a.cli_tools_json AS agent_cli_tools_json,
-      (
-        SELECT COUNT(*) FROM posts p
-        WHERE p.agent_id = c.agent_id
-          AND p.deleted_at IS NULL
-      ) AS posts_count,
-      (
-        SELECT COUNT(*) FROM agent_relationships ar
-        WHERE ar.target_agent_id = c.agent_id
-          AND ar.relationship_type = 'follow'
-          AND ar.status = 'active'
-      ) AS agent_followers_count,
-      (
-        SELECT COUNT(*) FROM community_members cm
-        WHERE cm.community_id = c.id
-      ) AS members_count
-     FROM agent_communities c
-     JOIN agents a ON a.id = c.agent_id
-     WHERE (?1 = '%%'
-       OR lower(c.name) LIKE ?1
-       OR lower(c.path) LIKE ?1
-       OR lower(ifnull(c.description, '')) LIKE ?1
-       OR lower(a.name) LIKE ?1)
-     ORDER BY ${orderByClause}
-     LIMIT ?2`,
-  )
-    .bind(query, limit)
-    .all<{
-      id: string;
-      agent_id: string;
-      name: string;
-      path: string;
-      description: string | null;
-      cover_image_url: string | null;
-      rules_json: string | null;
-      created_at: string;
-      agent_name: string;
-      agent_slug: string;
-      agent_avatar_url: string | null;
-      agent_personality_tags_json: string | null;
-      agent_skills_json: string | null;
-      agent_cli_tools_json: string | null;
-      posts_count: number;
-      agent_followers_count: number;
-      members_count: number;
-    }>();
+      (SELECT COUNT(*) FROM posts p
+       WHERE p.agent_id = c.agent_id
+         AND p.deleted_at IS NULL) AS posts_count,
+      (SELECT COUNT(*) FROM agent_relationships ar
+       WHERE ar.target_agent_id = c.agent_id
+         AND ar.relationship_type = 'follow'
+         AND ar.status = 'active') AS agent_followers_count,
+      (SELECT COUNT(*) FROM community_members cm
+       WHERE cm.community_id = c.id) AS members_count
+    FROM agent_communities c
+    JOIN agents a ON a.id = c.agent_id
+    WHERE (${query} = '%%'
+      OR lower(c.name) LIKE ${query}
+      OR lower(c.path) LIKE ${query}
+      OR lower(COALESCE(c.description, '')) LIKE ${query}
+      OR lower(a.name) LIKE ${query})
+    ORDER BY ${orderByClause}
+    LIMIT ${limit}
+  `);
 
   return c.json({
-    items: rows.results.map((row) => ({
+    items: rows.rows.map((row: Record<string, unknown>) => ({
       id: row.id,
       agentId: row.agent_id,
       name: row.name,
       path: row.path,
       description: row.description,
       coverImageUrl: row.cover_image_url,
-      rules: parseRules(row.rules_json),
+      rules: parseRules(row.rules_json as string | null),
       createdAt: row.created_at,
-      postsCount: row.posts_count ?? 0,
-      membersCount: row.members_count ?? 0,
-      agentFollowersCount: row.agent_followers_count ?? 0,
+      postsCount: (row.posts_count as number) ?? 0,
+      membersCount: (row.members_count as number) ?? 0,
+      agentFollowersCount: (row.agent_followers_count as number) ?? 0,
       agent: {
         name: row.agent_name,
         slug: row.agent_slug,
         avatarUrl: row.agent_avatar_url,
-        personalityTags: parseRules(row.agent_personality_tags_json),
-        skills: parseRules(row.agent_skills_json),
-        cliTools: parseRules(row.agent_cli_tools_json),
+        personalityTags: parseRules(row.agent_personality_tags_json as string | null),
+        skills: parseRules(row.agent_skills_json as string | null),
+        cliTools: parseRules(row.agent_cli_tools_json as string | null),
       },
     })),
   });
@@ -526,11 +512,13 @@ communitiesRoutes.post("/:communityId/members", requireAuth, async (c) => {
   }
 
   const communityId = c.req.param("communityId");
-  const community = await c.env.DB.prepare(
-    "SELECT id FROM agent_communities WHERE id = ?1 LIMIT 1",
-  )
-    .bind(communityId)
-    .first<{ id: string }>();
+  const db = c.get("db");
+
+  const community = await db
+    .select({ id: agentCommunities.id })
+    .from(agentCommunities)
+    .where(eq(agentCommunities.id, communityId))
+    .get();
 
   if (!community) {
     return notFound(c, "Community not found");
@@ -550,37 +538,43 @@ communitiesRoutes.post("/:communityId/members", requireAuth, async (c) => {
       return forbidden(c, "You can only join communities with your own agents");
     }
 
-    const existing = await c.env.DB.prepare(
-      "SELECT id FROM community_members WHERE community_id = ?1 AND agent_id = ?2 LIMIT 1",
-    )
-      .bind(communityId, agentId)
-      .first<{ id: string }>();
+    const existing = await db
+      .select({ id: communityMembers.id })
+      .from(communityMembers)
+      .where(
+        and(eq(communityMembers.communityId, communityId), eq(communityMembers.agentId, agentId)),
+      )
+      .get();
     if (existing) {
       return c.json({ success: true, alreadyMember: true });
     }
 
     const id = crypto.randomUUID();
-    await c.env.DB.prepare(
-      "INSERT INTO community_members (id, community_id, agent_id, role, joined_at) VALUES (?1, ?2, ?3, 'member', datetime('now'))",
-    )
-      .bind(id, communityId, agentId)
-      .run();
+    await db.insert(communityMembers).values({
+      id,
+      communityId,
+      agentId,
+      role: "member",
+    });
   } else {
-    const existing = await c.env.DB.prepare(
-      "SELECT id FROM community_members WHERE community_id = ?1 AND user_id = ?2 LIMIT 1",
-    )
-      .bind(communityId, authUser.id)
-      .first<{ id: string }>();
+    const existing = await db
+      .select({ id: communityMembers.id })
+      .from(communityMembers)
+      .where(
+        and(eq(communityMembers.communityId, communityId), eq(communityMembers.userId, authUser.id)),
+      )
+      .get();
     if (existing) {
       return c.json({ success: true, alreadyMember: true });
     }
 
     const id = crypto.randomUUID();
-    await c.env.DB.prepare(
-      "INSERT INTO community_members (id, community_id, user_id, role, joined_at) VALUES (?1, ?2, ?3, 'member', datetime('now'))",
-    )
-      .bind(id, communityId, authUser.id)
-      .run();
+    await db.insert(communityMembers).values({
+      id,
+      communityId,
+      userId: authUser.id,
+      role: "member",
+    });
   }
 
   return c.json({ success: true });
@@ -595,6 +589,7 @@ communitiesRoutes.delete("/:communityId/members", requireAuth, async (c) => {
 
   const communityId = c.req.param("communityId");
   const agentId = c.req.query("agentId") ?? null;
+  const db = c.get("db");
 
   if (agentId) {
     const agent = await ensureOwnedAgent(c, agentId);
@@ -602,17 +597,13 @@ communitiesRoutes.delete("/:communityId/members", requireAuth, async (c) => {
       return forbidden(c, "You can only leave communities with your own agents");
     }
 
-    await c.env.DB.prepare(
-      "DELETE FROM community_members WHERE community_id = ?1 AND agent_id = ?2",
-    )
-      .bind(communityId, agentId)
-      .run();
+    await db
+      .delete(communityMembers)
+      .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.agentId, agentId)));
   } else {
-    await c.env.DB.prepare(
-      "DELETE FROM community_members WHERE community_id = ?1 AND user_id = ?2",
-    )
-      .bind(communityId, authUser.id)
-      .run();
+    await db
+      .delete(communityMembers)
+      .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.userId, authUser.id)));
   }
 
   return c.json({ success: true });
@@ -624,19 +615,20 @@ communitiesRoutes.get("/:communityId/members", optionalAuth, async (c) => {
   const limit = Math.min(100, Math.max(1, Number(c.req.query("limit") ?? 50)));
   const page = Math.max(1, Number(c.req.query("page") ?? 1));
   const offset = (page - 1) * limit;
+  const db = c.get("db");
 
-  const community = await c.env.DB.prepare(
-    "SELECT id FROM agent_communities WHERE id = ?1 LIMIT 1",
-  )
-    .bind(communityId)
-    .first<{ id: string }>();
+  const community = await db
+    .select({ id: agentCommunities.id })
+    .from(agentCommunities)
+    .where(eq(agentCommunities.id, communityId))
+    .get();
 
   if (!community) {
     return notFound(c, "Community not found");
   }
 
-  const rows = await c.env.DB.prepare(
-    `SELECT
+  const rows = await db.execute(sql`
+    SELECT
       cm.id,
       cm.user_id,
       cm.agent_id,
@@ -650,35 +642,22 @@ communitiesRoutes.get("/:communityId/members", optionalAuth, async (c) => {
     FROM community_members cm
     LEFT JOIN users u ON u.id = cm.user_id
     LEFT JOIN agents a ON a.id = cm.agent_id
-    WHERE cm.community_id = ?1
+    WHERE cm.community_id = ${communityId}
     ORDER BY cm.joined_at DESC
-    LIMIT ?2 OFFSET ?3`,
-  )
-    .bind(communityId, limit, offset)
-    .all<{
-      id: string;
-      user_id: string | null;
-      agent_id: string | null;
-      role: string;
-      joined_at: string;
-      user_handle: string | null;
-      user_avatar_url: string | null;
-      agent_name: string | null;
-      agent_slug: string | null;
-      agent_avatar_url: string | null;
-    }>();
+    LIMIT ${limit} OFFSET ${offset}
+  `);
 
-  const totalRow = await c.env.DB.prepare(
-    "SELECT COUNT(*) AS cnt FROM community_members WHERE community_id = ?1",
-  )
-    .bind(communityId)
-    .first<{ cnt: number }>();
+  const totalRow = await db
+    .select({ cnt: count() })
+    .from(communityMembers)
+    .where(eq(communityMembers.communityId, communityId))
+    .get();
 
   return c.json({
     page,
     limit,
     total: totalRow?.cnt ?? 0,
-    items: rows.results.map((row) => ({
+    items: rows.rows.map((row: Record<string, unknown>) => ({
       id: row.id,
       type: row.user_id ? "user" : "agent",
       role: row.role,
@@ -707,11 +686,13 @@ communitiesRoutes.post("/:communityId/messages", requireAuth, async (c) => {
   }
 
   const communityId = c.req.param("communityId");
-  const community = await c.env.DB.prepare(
-    "SELECT id FROM agent_communities WHERE id = ?1 LIMIT 1",
-  )
-    .bind(communityId)
-    .first<{ id: string }>();
+  const db = c.get("db");
+
+  const community = await db
+    .select({ id: agentCommunities.id })
+    .from(agentCommunities)
+    .where(eq(agentCommunities.id, communityId))
+    .get();
   if (!community) {
     return notFound(c, "Community not found");
   }
@@ -731,12 +712,13 @@ communitiesRoutes.post("/:communityId/messages", requireAuth, async (c) => {
   }
 
   const id = crypto.randomUUID();
-  await c.env.DB.prepare(
-    `INSERT INTO community_messages (id, community_id, user_id, agent_id, body, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
-  )
-    .bind(id, communityId, agentId ? null : authUser.id, agentId, parsed.data.body.trim())
-    .run();
+  await db.insert(communityMessages).values({
+    id,
+    communityId,
+    userId: agentId ? null : authUser.id,
+    agentId,
+    body: parsed.data.body.trim(),
+  });
 
   return c.json({
     message: {
@@ -754,24 +736,23 @@ communitiesRoutes.get("/:communityId/messages", optionalAuth, async (c) => {
   const communityId = c.req.param("communityId");
   const limit = Math.min(100, Math.max(1, Number(c.req.query("limit") ?? 50)));
   const before = c.req.query("before") ?? null;
+  const db = c.get("db");
 
-  const community = await c.env.DB.prepare(
-    "SELECT id FROM agent_communities WHERE id = ?1 LIMIT 1",
-  )
-    .bind(communityId)
-    .first<{ id: string }>();
+  const community = await db
+    .select({ id: agentCommunities.id })
+    .from(agentCommunities)
+    .where(eq(agentCommunities.id, communityId))
+    .get();
   if (!community) {
     return notFound(c, "Community not found");
   }
 
   const whereClause = before
-    ? "cm.community_id = ?1 AND cm.deleted_at IS NULL AND cm.created_at < ?3"
-    : "cm.community_id = ?1 AND cm.deleted_at IS NULL";
+    ? sql`cm.community_id = ${communityId} AND cm.deleted_at IS NULL AND cm.created_at < ${before}`
+    : sql`cm.community_id = ${communityId} AND cm.deleted_at IS NULL`;
 
-  const bindings = before ? [communityId, limit, before] : [communityId, limit];
-
-  const rows = await c.env.DB.prepare(
-    `SELECT
+  const rows = await db.execute(sql`
+    SELECT
       cm.id,
       cm.user_id,
       cm.agent_id,
@@ -782,29 +763,16 @@ communitiesRoutes.get("/:communityId/messages", optionalAuth, async (c) => {
       a.name AS agent_name,
       a.slug AS agent_slug,
       a.avatar_url AS agent_avatar_url
-     FROM community_messages cm
-     LEFT JOIN users u ON u.id = cm.user_id
-     LEFT JOIN agents a ON a.id = cm.agent_id
-     WHERE ${whereClause}
-     ORDER BY cm.created_at DESC
-     LIMIT ?2`,
-  )
-    .bind(...bindings)
-    .all<{
-      id: string;
-      user_id: string | null;
-      agent_id: string | null;
-      body: string;
-      created_at: string;
-      user_handle: string | null;
-      user_avatar_url: string | null;
-      agent_name: string | null;
-      agent_slug: string | null;
-      agent_avatar_url: string | null;
-    }>();
+    FROM community_messages cm
+    LEFT JOIN users u ON u.id = cm.user_id
+    LEFT JOIN agents a ON a.id = cm.agent_id
+    WHERE ${whereClause}
+    ORDER BY cm.created_at DESC
+    LIMIT ${limit}
+  `);
 
   return c.json({
-    items: rows.results.map((row) => ({
+    items: rows.rows.map((row: Record<string, unknown>) => ({
       id: row.id,
       body: row.body,
       createdAt: row.created_at,
@@ -827,8 +795,10 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
     return notFound(c, "Community not found");
   }
 
-  const community = await c.env.DB.prepare(
-    `SELECT
+  const db = c.get("db");
+
+  const community = await db.execute(sql`
+    SELECT
       c.id,
       c.agent_id,
       c.name,
@@ -845,41 +815,23 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
       a.personality_tags_json AS agent_personality_tags_json,
       a.skills_json AS agent_skills_json,
       a.cli_tools_json AS agent_cli_tools_json
-     FROM agent_communities c
-     JOIN agents a ON a.id = c.agent_id
-     WHERE c.path = ?1
-     LIMIT 1`,
-  )
-    .bind(path)
-    .first<{
-      id: string;
-      agent_id: string;
-      name: string;
-      path: string;
-      description: string | null;
-      cover_image_url: string | null;
-      rules_json: string | null;
-      created_at: string;
-      updated_at: string;
-      owner_user_id: string;
-      agent_name: string;
-      agent_slug: string;
-      agent_avatar_url: string | null;
-      agent_personality_tags_json: string | null;
-      agent_skills_json: string | null;
-      agent_cli_tools_json: string | null;
-    }>();
+    FROM agent_communities c
+    JOIN agents a ON a.id = c.agent_id
+    WHERE c.path = ${path}
+    LIMIT 1
+  `);
 
-  if (!community) {
+  const row = community.rows[0] as Record<string, unknown> | undefined;
+  if (!row) {
     return notFound(c, "Community not found");
   }
 
   // Get members count
-  const membersCountRow = await c.env.DB.prepare(
-    "SELECT COUNT(*) AS cnt FROM community_members WHERE community_id = ?1",
-  )
-    .bind(community.id)
-    .first<{ cnt: number }>();
+  const membersCountRow = await db
+    .select({ cnt: count() })
+    .from(communityMembers)
+    .where(eq(communityMembers.communityId, row.id as string))
+    .get();
   const membersCount = membersCountRow?.cnt ?? 0;
 
   let canSeeSubscriberPosts = false;
@@ -887,27 +839,37 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
   let isSubscribed = false;
   let isMember = false;
   if (authUser) {
-    if (authUser.role === "admin" || authUser.id === community.owner_user_id) {
+    if (authUser.role === "admin" || authUser.id === (row.owner_user_id as string)) {
       canSeeSubscriberPosts = true;
     }
 
     const [followRow, subscriptionRow, memberRow] = await Promise.all([
-      c.env.DB.prepare(
-        "SELECT id FROM follows WHERE user_id = ?1 AND agent_id = ?2 LIMIT 1",
-      )
-        .bind(authUser.id, community.agent_id)
-        .first<{ id: string }>(),
-      c.env.DB.prepare(
-        `SELECT id FROM subscriptions
-         WHERE user_id = ?1 AND agent_id = ?2 AND status = 'active' LIMIT 1`,
-      )
-        .bind(authUser.id, community.agent_id)
-        .first<{ id: string }>(),
-      c.env.DB.prepare(
-        "SELECT id FROM community_members WHERE community_id = ?1 AND user_id = ?2 LIMIT 1",
-      )
-        .bind(community.id, authUser.id)
-        .first<{ id: string }>(),
+      db
+        .select({ id: follows.id })
+        .from(follows)
+        .where(and(eq(follows.userId, authUser.id), eq(follows.agentId, row.agent_id as string)))
+        .get(),
+      db
+        .select({ id: subscriptions.id })
+        .from(subscriptions)
+        .where(
+          and(
+            eq(subscriptions.userId, authUser.id),
+            eq(subscriptions.agentId, row.agent_id as string),
+            eq(subscriptions.status, "active"),
+          ),
+        )
+        .get(),
+      db
+        .select({ id: communityMembers.id })
+        .from(communityMembers)
+        .where(
+          and(
+            eq(communityMembers.communityId, row.id as string),
+            eq(communityMembers.userId, authUser.id),
+          ),
+        )
+        .get(),
     ]);
     isFollowed = Boolean(followRow);
     isSubscribed = Boolean(subscriptionRow);
@@ -917,11 +879,12 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
     }
   }
 
-  const visibilityClause = canSeeSubscriberPosts
-    ? "p.visibility IN ('public', 'subscriber')"
-    : "p.visibility = 'public'";
-  const posts = await c.env.DB.prepare(
-    `SELECT
+  const visibilityCondition = canSeeSubscriberPosts
+    ? sql`(p.visibility IN ('public', 'subscriber'))`
+    : sql`(p.visibility = 'public')`;
+
+  const postsRows = await db.execute(sql`
+    SELECT
       p.id,
       p.body_text,
       p.media_type,
@@ -931,50 +894,38 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
       p.created_at,
       (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes_count,
       (SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id) AS comments_count
-     FROM posts p
-     WHERE p.agent_id = ?1
-       AND p.deleted_at IS NULL
-       AND ${visibilityClause}
-     ORDER BY p.created_at DESC
-     LIMIT 40`,
-  )
-    .bind(community.agent_id)
-    .all<{
-      id: string;
-      body_text: string;
-      media_type: "image" | "video" | "none";
-      media_url: string | null;
-      visibility: "public" | "subscriber";
-      ai_generated: number;
-      created_at: string;
-      likes_count: number;
-      comments_count: number;
-    }>();
+    FROM posts p
+    WHERE p.agent_id = ${row.agent_id}
+      AND p.deleted_at IS NULL
+      AND ${visibilityCondition}
+    ORDER BY p.created_at DESC
+    LIMIT 40
+  `);
 
   return c.json({
     community: {
-      id: community.id,
-      agentId: community.agent_id,
-      name: community.name,
-      path: community.path,
-      description: community.description,
-      coverImageUrl: community.cover_image_url,
-      rules: parseRules(community.rules_json),
-      createdAt: community.created_at,
-      updatedAt: community.updated_at,
+      id: row.id,
+      agentId: row.agent_id,
+      name: row.name,
+      path: row.path,
+      description: row.description,
+      coverImageUrl: row.cover_image_url,
+      rules: parseRules(row.rules_json as string | null),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
       membersCount,
       isFollowed,
       isSubscribed,
       isMember,
       agent: {
-        name: community.agent_name,
-        slug: community.agent_slug,
-        avatarUrl: community.agent_avatar_url,
-        personalityTags: parseRules(community.agent_personality_tags_json),
-        skills: parseRules(community.agent_skills_json),
-        cliTools: parseRules(community.agent_cli_tools_json),
+        name: row.agent_name,
+        slug: row.agent_slug,
+        avatarUrl: row.agent_avatar_url,
+        personalityTags: parseRules(row.agent_personality_tags_json as string | null),
+        skills: parseRules(row.agent_skills_json as string | null),
+        cliTools: parseRules(row.agent_cli_tools_json as string | null),
       },
     },
-    posts: posts.results,
+    posts: postsRows.rows,
   });
 });

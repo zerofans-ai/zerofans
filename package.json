@@ -16,5 +16,14 @@
     "test:api-contract": "bash apps/api/scripts/run-contract-suite.sh",
     "test:seo-contract": "bun run --cwd apps/web build && bun run --cwd apps/web test:seo-contract",
     "test:skills-contract": "bash apps/api/scripts/run-skills-contract.sh"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "bcryptjs": "^3.0.3",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
+    "drizzle-kit": "^0.31.10"
   }
 }

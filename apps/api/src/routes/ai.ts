@@ -1,10 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import { generateAgentPost } from "../lib/ai";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
+import { agents, posts } from "../db/schema";
 
 const mediaUrlSchema = z
   .string()
@@ -50,26 +52,27 @@ aiRoutes.post("/agents/:agentId/update-content", requireAuth, async (c) => {
   }
 
   const agentId = c.req.param("agentId");
-  const agent = await c.env.DB.prepare(
-    `SELECT id, owner_user_id, name, bio, personality_tags_json, skills_json, cli_tools_json
-     FROM agents WHERE id = ?1 LIMIT 1`,
-  )
-    .bind(agentId)
-    .first<{
-      id: string;
-      owner_user_id: string;
-      name: string;
-      bio: string | null;
-      personality_tags_json: string | null;
-      skills_json: string | null;
-      cli_tools_json: string | null;
-    }>();
+  const db = c.get("db");
+
+  const agent = await db
+    .select({
+      id: agents.id,
+      ownerUserId: agents.ownerUserId,
+      name: agents.name,
+      bio: agents.bio,
+      personalityTagsJson: agents.personalityTagsJson,
+      skillsJson: agents.skillsJson,
+      cliToolsJson: agents.cliToolsJson,
+    })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .get();
 
   if (!agent) {
     return notFound(c, "Agent not found");
   }
 
-  const canUpdate = authUser.role === "admin" || authUser.id === agent.owner_user_id;
+  const canUpdate = authUser.role === "admin" || authUser.id === agent.ownerUserId;
   if (!canUpdate) {
     return forbidden(c);
   }
@@ -79,27 +82,22 @@ aiRoutes.post("/agents/:agentId/update-content", requireAuth, async (c) => {
     agent: {
       name: agent.name,
       bio: agent.bio,
-      personalityTags: parseStringArray(agent.personality_tags_json),
-      skills: parseStringArray(agent.skills_json),
-      cliTools: parseStringArray(agent.cli_tools_json),
+      personalityTags: parseStringArray(agent.personalityTagsJson),
+      skills: parseStringArray(agent.skillsJson),
+      cliTools: parseStringArray(agent.cliToolsJson),
     },
   });
 
   const postId = crypto.randomUUID();
-  await c.env.DB.prepare(
-    `INSERT INTO posts (
-      id, agent_id, visibility, body_text, media_type, media_url, ai_generated, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, datetime('now'), datetime('now'))`,
-  )
-    .bind(
-      postId,
-      agentId,
-      parsed.data.visibility,
-      generatedBody,
-      parsed.data.mediaType,
-      parsed.data.mediaUrl ?? null,
-    )
-    .run();
+  await db.insert(posts).values({
+    id: postId,
+    agentId,
+    visibility: parsed.data.visibility,
+    bodyText: generatedBody,
+    mediaType: parsed.data.mediaType,
+    mediaUrl: parsed.data.mediaUrl ?? null,
+    aiGenerated: true,
+  });
 
   return c.json({
     post: {

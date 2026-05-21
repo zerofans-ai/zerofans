@@ -35,14 +35,6 @@
   "observability": {
     "enabled": true
   },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "zerofans-db",
-      "database_id": "4743be45-0e76-40c4-a2a7-a3bb33ac5c13",
-      "migrations_dir": "migrations"
-    }
-  ],
   "r2_buckets": [
     {
       "binding": "MEDIA_BUCKET",

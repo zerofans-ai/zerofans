@@ -1,9 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { eq, sql, and } from "drizzle-orm";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
+import type { Database } from "../db";
 import type { SkillDefinition } from "../types/skills";
+import { agents, skills } from "../db/schema";
 
 const skillCategoryEnum = z.enum([
   "content",
@@ -61,16 +64,17 @@ function toSlug(input: string): string {
     .replace(/^-|-$/g, "");
 }
 
-async function makeUniqueSkillSlug(baseName: string, db: D1Database): Promise<string> {
+async function makeUniqueSkillSlug(baseName: string, db: Database): Promise<string> {
   const baseSlug = toSlug(baseName) || "skill";
   let candidate = baseSlug;
   let attempts = 0;
 
   while (attempts < 8) {
     const existing = await db
-      .prepare("SELECT id FROM skills WHERE slug = ?1 LIMIT 1")
-      .bind(candidate)
-      .first<{ id: string }>();
+      .select({ id: skills.id })
+      .from(skills)
+      .where(eq(skills.slug, candidate))
+      .get();
 
     if (!existing) return candidate;
     attempts += 1;
@@ -118,43 +122,38 @@ skillsRoutes.post("/", requireAuth, async (c) => {
   const parsed = createSkillSchema.safeParse(body);
   if (!parsed.success) return badRequest(c, "Invalid skill payload");
 
+  const db = c.get("db");
+
   if (parsed.data.creator_agent_id) {
-    const agent = await c.env.DB.prepare(
-      "SELECT id, owner_user_id FROM agents WHERE id = ?1 LIMIT 1",
-    )
-      .bind(parsed.data.creator_agent_id)
-      .first<{ id: string; owner_user_id: string }>();
+    const agent = await db
+      .select({ id: agents.id, ownerUserId: agents.ownerUserId })
+      .from(agents)
+      .where(eq(agents.id, parsed.data.creator_agent_id))
+      .get();
 
     if (!agent) return notFound(c, "Creator agent not found");
-    if (agent.owner_user_id !== authUser.id && authUser.role !== "admin") {
+    if (agent.ownerUserId !== authUser.id && authUser.role !== "admin") {
       return forbidden(c, "You can only create skills for your own agents");
     }
   }
 
   const id = crypto.randomUUID();
-  const slug = await makeUniqueSkillSlug(parsed.data.name, c.env.DB);
+  const slug = await makeUniqueSkillSlug(parsed.data.name, db);
 
-  await c.env.DB.prepare(
-    `INSERT INTO skills (
-      id, slug, name, description, category, input_schema, output_schema,
-      action_type, action_config, visibility, creator_agent_id, enabled,
-      created_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, datetime('now'), datetime('now'))`,
-  )
-    .bind(
-      id,
-      slug,
-      parsed.data.name.trim(),
-      parsed.data.description ?? "",
-      parsed.data.category,
-      JSON.stringify(parsed.data.input_schema ?? {}),
-      JSON.stringify(parsed.data.output_schema ?? {}),
-      parsed.data.action_type,
-      JSON.stringify(parsed.data.action_config ?? {}),
-      parsed.data.visibility ?? "public",
-      parsed.data.creator_agent_id ?? null,
-    )
-    .run();
+  await db.insert(skills).values({
+    id,
+    slug,
+    name: parsed.data.name.trim(),
+    description: parsed.data.description ?? "",
+    category: parsed.data.category,
+    inputSchema: JSON.stringify(parsed.data.input_schema ?? {}),
+    outputSchema: JSON.stringify(parsed.data.output_schema ?? {}),
+    actionType: parsed.data.action_type,
+    actionConfig: JSON.stringify(parsed.data.action_config ?? {}),
+    visibility: parsed.data.visibility ?? "public",
+    creatorAgentId: parsed.data.creator_agent_id ?? null,
+    enabled: true,
+  });
 
   return c.json({
     skill: {
@@ -169,7 +168,7 @@ skillsRoutes.post("/", requireAuth, async (c) => {
       action_config: parsed.data.action_config ?? {},
       visibility: parsed.data.visibility ?? "public",
       creator_agent_id: parsed.data.creator_agent_id ?? null,
-      enabled: 1,
+      enabled: true,
     },
   });
 });
@@ -185,45 +184,44 @@ skillsRoutes.get("/discover", optionalAuth, async (c) => {
 
   const limit = parsed.data.limit ?? 24;
   const query = `%${(parsed.data.q ?? "").trim().toLowerCase()}%`;
+  const db = c.get("db");
 
-  let sql = `SELECT * FROM skills WHERE enabled = 1 AND visibility = 'public'`;
-  const bindings: unknown[] = [];
+  let querySql = sql`SELECT * FROM skills WHERE enabled = true AND visibility = 'public'`;
+
+  const conditions: ReturnType<typeof sql>[] = [];
 
   if (parsed.data.q) {
-    sql += ` AND (lower(name) LIKE ?${bindings.length + 1} OR lower(description) LIKE ?${bindings.length + 1})`;
-    bindings.push(query);
+    conditions.push(sql`AND (lower(name) LIKE ${query} OR lower(description) LIKE ${query})`);
   }
 
   if (parsed.data.category) {
-    sql += ` AND category = ?${bindings.length + 1}`;
-    bindings.push(parsed.data.category);
+    conditions.push(sql`AND category = ${parsed.data.category}`);
   }
 
-  sql += ` ORDER BY created_at DESC LIMIT ?${bindings.length + 1}`;
-  bindings.push(limit);
+  conditions.push(sql`ORDER BY created_at DESC LIMIT ${limit}`);
 
-  const rows = await c.env.DB.prepare(sql)
-    .bind(...bindings)
-    .all();
+  const fullSql = sql.join([querySql, ...conditions], sql` `);
+
+  const rows = await db.execute(fullSql);
 
   return c.json({
-    items: (rows.results ?? []).map((row) => formatSkill(row as Record<string, unknown>)),
+    items: rows.rows.map((row) => formatSkill(row as Record<string, unknown>)),
   });
 });
 
 // Get skill by slug or id
 skillsRoutes.get("/:slugOrId", optionalAuth, async (c) => {
   const slugOrId = c.req.param("slugOrId");
+  const db = c.get("db");
 
-  const row = await c.env.DB.prepare(
-    "SELECT * FROM skills WHERE (slug = ?1 OR id = ?1) AND enabled = 1 LIMIT 1",
-  )
-    .bind(slugOrId)
-    .first();
+  const row = await db.execute(sql`
+    SELECT * FROM skills WHERE (slug = ${slugOrId} OR id = ${slugOrId}) AND enabled = true LIMIT 1
+  `);
 
-  if (!row) return notFound(c, "Skill not found");
+  const skill = row.rows[0];
+  if (!skill) return notFound(c, "Skill not found");
 
-  return c.json({ skill: formatSkill(row as Record<string, unknown>) });
+  return c.json({ skill: formatSkill(skill as Record<string, unknown>) });
 });
 
 // Update skill (owner only)
@@ -235,68 +233,62 @@ skillsRoutes.patch("/:skillId", requireAuth, async (c) => {
   const parsed = patchSkillSchema.safeParse(body);
   if (!parsed.success) return badRequest(c, "Invalid update payload");
 
-  const skill = await c.env.DB.prepare("SELECT * FROM skills WHERE id = ?1 LIMIT 1")
-    .bind(c.req.param("skillId"))
-    .first<SkillDefinition>();
+  const db = c.get("db");
+  const skillId = c.req.param("skillId");
 
-  if (!skill) return notFound(c, "Skill not found");
+  const skillRow = await db
+    .select()
+    .from(skills)
+    .where(eq(skills.id, skillId))
+    .get();
 
-  if (skill.creator_agent_id) {
-    const agent = await c.env.DB.prepare(
-      "SELECT owner_user_id FROM agents WHERE id = ?1 LIMIT 1",
-    )
-      .bind(skill.creator_agent_id)
-      .first<{ owner_user_id: string }>();
+  if (!skillRow) return notFound(c, "Skill not found");
 
-    if (agent && agent.owner_user_id !== authUser.id && authUser.role !== "admin") {
+  if (skillRow.creatorAgentId) {
+    const agent = await db
+      .select({ ownerUserId: agents.ownerUserId })
+      .from(agents)
+      .where(eq(agents.id, skillRow.creatorAgentId))
+      .get();
+
+    if (agent && agent.ownerUserId !== authUser.id && authUser.role !== "admin") {
       return forbidden(c);
     }
   } else if (authUser.role !== "admin") {
     return forbidden(c, "Only admins can update built-in skills");
   }
 
-  const updates: string[] = [];
-  const values: unknown[] = [];
+  const updates: Partial<typeof skills.$inferInsert> = {};
 
   if (parsed.data.name !== undefined) {
-    updates.push("name = ?");
-    values.push(parsed.data.name.trim());
+    updates.name = parsed.data.name.trim();
   }
   if (parsed.data.description !== undefined) {
-    updates.push("description = ?");
-    values.push(parsed.data.description);
+    updates.description = parsed.data.description;
   }
   if (parsed.data.category !== undefined) {
-    updates.push("category = ?");
-    values.push(parsed.data.category);
+    updates.category = parsed.data.category;
   }
   if (parsed.data.input_schema !== undefined) {
-    updates.push("input_schema = ?");
-    values.push(JSON.stringify(parsed.data.input_schema));
+    updates.inputSchema = JSON.stringify(parsed.data.input_schema);
   }
   if (parsed.data.output_schema !== undefined) {
-    updates.push("output_schema = ?");
-    values.push(JSON.stringify(parsed.data.output_schema));
+    updates.outputSchema = JSON.stringify(parsed.data.output_schema);
   }
   if (parsed.data.action_type !== undefined) {
-    updates.push("action_type = ?");
-    values.push(parsed.data.action_type);
+    updates.actionType = parsed.data.action_type;
   }
   if (parsed.data.action_config !== undefined) {
-    updates.push("action_config = ?");
-    values.push(JSON.stringify(parsed.data.action_config));
+    updates.actionConfig = JSON.stringify(parsed.data.action_config);
   }
   if (parsed.data.visibility !== undefined) {
-    updates.push("visibility = ?");
-    values.push(parsed.data.visibility);
+    updates.visibility = parsed.data.visibility;
   }
 
-  if (updates.length === 0) return badRequest(c, "No fields to update");
+  if (Object.keys(updates).length === 0) return badRequest(c, "No fields to update");
 
-  updates.push("updated_at = datetime('now')");
-  await c.env.DB.prepare(`UPDATE skills SET ${updates.join(", ")} WHERE id = ?`)
-    .bind(...values, skill.id)
-    .run();
+  updates.updatedAt = sql`now()`;
+  await db.update(skills).set(updates).where(eq(skills.id, skillRow.id));
 
   return c.json({ success: true });
 });
@@ -306,31 +298,38 @@ skillsRoutes.delete("/:skillId", requireAuth, async (c) => {
   const authUser = c.get("authUser");
   if (!authUser) return unauthorized(c);
 
-  const skill = await c.env.DB.prepare("SELECT * FROM skills WHERE id = ?1 LIMIT 1")
-    .bind(c.req.param("skillId"))
-    .first<SkillDefinition>();
+  const db = c.get("db");
+  const skillId = c.req.param("skillId");
 
-  if (!skill) return notFound(c, "Skill not found");
+  const skillRow = await db
+    .select()
+    .from(skills)
+    .where(eq(skills.id, skillId))
+    .get();
 
-  if (skill.creator_agent_id) {
-    const agent = await c.env.DB.prepare(
-      "SELECT owner_user_id FROM agents WHERE id = ?1 LIMIT 1",
-    )
-      .bind(skill.creator_agent_id)
-      .first<{ owner_user_id: string }>();
+  if (!skillRow) return notFound(c, "Skill not found");
 
-    if (agent && agent.owner_user_id !== authUser.id && authUser.role !== "admin") {
+  if (skillRow.creatorAgentId) {
+    const agent = await db
+      .select({ ownerUserId: agents.ownerUserId })
+      .from(agents)
+      .where(eq(agents.id, skillRow.creatorAgentId))
+      .get();
+
+    if (agent && agent.ownerUserId !== authUser.id && authUser.role !== "admin") {
       return forbidden(c);
     }
   } else if (authUser.role !== "admin") {
     return forbidden(c, "Only admins can delete built-in skills");
   }
 
-  await c.env.DB.prepare(
-    "UPDATE skills SET enabled = 0, updated_at = datetime('now') WHERE id = ?1",
-  )
-    .bind(skill.id)
-    .run();
+  await db
+    .update(skills)
+    .set({
+      enabled: false,
+      updatedAt: sql`now()`,
+    })
+    .where(eq(skills.id, skillRow.id));
 
   return c.json({ success: true });
 });

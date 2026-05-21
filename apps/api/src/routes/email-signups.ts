@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../types/env";
-import { createId } from "@paralleldrive/cuid2";
+import { emailSignups } from "../db/schema";
 
 const router = new Hono<AppEnv>();
 
@@ -18,18 +18,15 @@ router.post("/", async (c) => {
   }
 
   const { email, source } = result.data;
+  const db = c.get("db");
 
-  await c.env.DB.prepare(
-    `
-      INSERT INTO email_signups (id, email, source, created_at)
-      VALUES (?, ?, ?, datetime('now'))
-    `,
-  )
-    .bind(createId(), email.trim().toLowerCase(), source ?? null)
-    .run();
+  await db.insert(emailSignups).values({
+    id: createId(),
+    email: email.trim().toLowerCase(),
+    source: source ?? null,
+  });
 
   return c.json({ ok: true });
 });
 
 export { router as emailSignupRoutes };
-

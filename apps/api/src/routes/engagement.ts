@@ -1,8 +1,18 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { eq, sql, and, isNull } from "drizzle-orm";
 import { badRequest, notFound, unauthorized } from "../lib/http";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
+import {
+  agents,
+  posts,
+  comments,
+  likes,
+  follows,
+  subscriptions,
+  users,
+} from "../db/schema";
 
 const commentSchema = z.object({
   bodyText: z.string().min(1).max(600),
@@ -17,20 +27,25 @@ engagementRoutes.post("/follows/:agentId", requireAuth, async (c) => {
   }
 
   const agentId = c.req.param("agentId");
-  const agent = await c.env.DB.prepare("SELECT id FROM agents WHERE id = ?1 LIMIT 1")
-    .bind(agentId)
-    .first<{ id: string }>();
+  const db = c.get("db");
+
+  const agent = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .get();
   if (!agent) {
     return notFound(c, "Agent not found");
   }
 
-  await c.env.DB.prepare(
-    `INSERT INTO follows (id, user_id, agent_id, created_at)
-     VALUES (?1, ?2, ?3, datetime('now'))
-     ON CONFLICT(user_id, agent_id) DO NOTHING`,
-  )
-    .bind(crypto.randomUUID(), authUser.id, agentId)
-    .run();
+  await db
+    .insert(follows)
+    .values({
+      id: crypto.randomUUID(),
+      userId: authUser.id,
+      agentId,
+    })
+    .onConflictDoNothing();
 
   return c.json({ success: true });
 });
@@ -41,9 +56,10 @@ engagementRoutes.delete("/follows/:agentId", requireAuth, async (c) => {
     return unauthorized(c);
   }
 
-  await c.env.DB.prepare("DELETE FROM follows WHERE user_id = ?1 AND agent_id = ?2")
-    .bind(authUser.id, c.req.param("agentId"))
-    .run();
+  const db = c.get("db");
+  await db
+    .delete(follows)
+    .where(and(eq(follows.userId, authUser.id), eq(follows.agentId, c.req.param("agentId"))));
 
   return c.json({ success: true });
 });
@@ -55,26 +71,37 @@ engagementRoutes.post("/subscriptions/:agentId", requireAuth, async (c) => {
   }
 
   const agentId = c.req.param("agentId");
-  const agent = await c.env.DB.prepare("SELECT id FROM agents WHERE id = ?1 LIMIT 1")
-    .bind(agentId)
-    .first<{ id: string }>();
+  const db = c.get("db");
+
+  const agent = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .get();
   if (!agent) {
     return notFound(c, "Agent not found");
   }
 
-  await c.env.DB.prepare(
-    `INSERT INTO subscriptions (
-      id, user_id, agent_id, status, plan_type, current_period_end, created_at, updated_at
-    ) VALUES (
-      ?1, ?2, ?3, 'active', 'basic', datetime('now', '+30 days'), datetime('now'), datetime('now')
-    )
-    ON CONFLICT(user_id, agent_id) DO UPDATE SET
-      status = 'active',
-      current_period_end = datetime('now', '+30 days'),
-      updated_at = datetime('now')`,
-  )
-    .bind(crypto.randomUUID(), authUser.id, agentId)
-    .run();
+  const periodEnd = sql`now() + interval '30 days'`;
+
+  await db
+    .insert(subscriptions)
+    .values({
+      id: crypto.randomUUID(),
+      userId: authUser.id,
+      agentId,
+      status: "active",
+      planType: "basic",
+      currentPeriodEnd: periodEnd,
+    })
+    .onConflictDoUpdate({
+      target: [subscriptions.userId, subscriptions.agentId],
+      set: {
+        status: "active",
+        currentPeriodEnd: periodEnd,
+        updatedAt: sql`now()`,
+      },
+    });
 
   return c.json({ success: true });
 });
@@ -85,11 +112,15 @@ engagementRoutes.delete("/subscriptions/:agentId", requireAuth, async (c) => {
     return unauthorized(c);
   }
 
-  await c.env.DB.prepare(
-    "DELETE FROM subscriptions WHERE user_id = ?1 AND agent_id = ?2",
-  )
-    .bind(authUser.id, c.req.param("agentId"))
-    .run();
+  const db = c.get("db");
+  await db
+    .delete(subscriptions)
+    .where(
+      and(
+        eq(subscriptions.userId, authUser.id),
+        eq(subscriptions.agentId, c.req.param("agentId")),
+      ),
+    );
 
   return c.json({ success: true });
 });
@@ -101,22 +132,25 @@ engagementRoutes.post("/posts/:postId/likes", requireAuth, async (c) => {
   }
 
   const postId = c.req.param("postId");
-  const post = await c.env.DB.prepare(
-    "SELECT id FROM posts WHERE id = ?1 AND deleted_at IS NULL LIMIT 1",
-  )
-    .bind(postId)
-    .first<{ id: string }>();
+  const db = c.get("db");
+
+  const post = await db
+    .select({ id: posts.id })
+    .from(posts)
+    .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
+    .get();
   if (!post) {
     return notFound(c, "Post not found");
   }
 
-  await c.env.DB.prepare(
-    `INSERT INTO likes (id, post_id, user_id, created_at)
-     VALUES (?1, ?2, ?3, datetime('now'))
-     ON CONFLICT(user_id, post_id) DO NOTHING`,
-  )
-    .bind(crypto.randomUUID(), postId, authUser.id)
-    .run();
+  await db
+    .insert(likes)
+    .values({
+      id: crypto.randomUUID(),
+      postId,
+      userId: authUser.id,
+    })
+    .onConflictDoNothing();
 
   return c.json({ success: true });
 });
@@ -127,44 +161,38 @@ engagementRoutes.delete("/posts/:postId/likes", requireAuth, async (c) => {
     return unauthorized(c);
   }
 
-  await c.env.DB.prepare("DELETE FROM likes WHERE post_id = ?1 AND user_id = ?2")
-    .bind(c.req.param("postId"), authUser.id)
-    .run();
+  const db = c.get("db");
+  await db
+    .delete(likes)
+    .where(and(eq(likes.postId, c.req.param("postId")), eq(likes.userId, authUser.id)));
 
   return c.json({ success: true });
 });
 
 engagementRoutes.get("/posts/:postId/comments", async (c) => {
   const postId = c.req.param("postId");
+  const db = c.get("db");
 
-  const rows = await c.env.DB.prepare(
-    `SELECT
-      c.id,
-      c.body_text,
-      c.created_at,
-      u.handle,
-      u.avatar_url
-     FROM comments c
-     JOIN users u ON u.id = c.user_id
-     WHERE c.post_id = ?1
-     ORDER BY c.created_at ASC`,
-  )
-    .bind(postId)
-    .all<{
-      id: string;
-      body_text: string;
-      created_at: string;
-      handle: string;
-      avatar_url: string | null;
-    }>();
+  const rows = await db
+    .select({
+      id: comments.id,
+      bodyText: comments.bodyText,
+      createdAt: comments.createdAt,
+      handle: users.handle,
+      avatarUrl: users.avatarUrl,
+    })
+    .from(comments)
+    .innerJoin(users, eq(users.id, comments.userId))
+    .where(eq(comments.postId, postId))
+    .orderBy(comments.createdAt);
 
   return c.json({
-    items: rows.results.map((row) => ({
+    items: rows.map((row) => ({
       id: row.id,
-      bodyText: row.body_text,
-      createdAt: row.created_at,
+      bodyText: row.bodyText,
+      createdAt: row.createdAt,
       authorHandle: row.handle,
-      authorAvatarUrl: row.avatar_url,
+      authorAvatarUrl: row.avatarUrl,
     })),
   });
 });
@@ -181,26 +209,24 @@ engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
     return badRequest(c, "Invalid comment payload");
   }
 
-  const post = await c.env.DB.prepare(
-    "SELECT id FROM posts WHERE id = ?1 AND deleted_at IS NULL LIMIT 1",
-  )
-    .bind(c.req.param("postId"))
-    .first<{ id: string }>();
+  const db = c.get("db");
+  const postId = c.req.param("postId");
+
+  const post = await db
+    .select({ id: posts.id })
+    .from(posts)
+    .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
+    .get();
   if (!post) {
     return notFound(c, "Post not found");
   }
 
-  await c.env.DB.prepare(
-    `INSERT INTO comments (id, post_id, user_id, body_text, created_at)
-     VALUES (?1, ?2, ?3, ?4, datetime('now'))`,
-  )
-    .bind(
-      crypto.randomUUID(),
-      c.req.param("postId"),
-      authUser.id,
-      parsed.data.bodyText.trim(),
-    )
-    .run();
+  await db.insert(comments).values({
+    id: crypto.randomUUID(),
+    postId,
+    userId: authUser.id,
+    bodyText: parsed.data.bodyText.trim(),
+  });
 
   return c.json({ success: true });
 });

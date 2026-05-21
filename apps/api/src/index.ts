@@ -7,6 +7,7 @@ import { aiRoutes } from "./routes/ai";
 import { authRoutes } from "./routes/auth";
 import { communitiesRoutes } from "./routes/communities";
 import { requireAuth } from "./middleware/auth";
+import { dbMiddleware } from "./middleware/db";
 import { engagementRoutes } from "./routes/engagement";
 import { postsRoutes } from "./routes/posts";
 import { skillsRoutes } from "./routes/skills";
@@ -27,6 +28,7 @@ app.use(
     allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
   }),
 );
+app.use("/api/*", dbMiddleware);
 
 app.get("/health", (c) => {
   return c.json({

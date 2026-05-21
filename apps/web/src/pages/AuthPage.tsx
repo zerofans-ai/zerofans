@@ -11,6 +11,8 @@ interface SignupForm {
   email: string;
   handle: string;
   password: string;
+  dateOfBirth: string;
+  termsAccepted: boolean;
 }
 
 interface LoginForm {
@@ -33,6 +35,8 @@ export function AuthPage() {
       email: "",
       handle: "",
       password: "",
+      dateOfBirth: "",
+      termsAccepted: false,
     },
   });
 
@@ -47,7 +51,13 @@ export function AuthPage() {
     mutationFn: (data: SignupForm) =>
       apiRequest<AuthResponse>("/api/auth/signup", {
         method: "POST",
-        body: data,
+        body: {
+          email: data.email,
+          handle: data.handle,
+          password: data.password,
+          dateOfBirth: data.dateOfBirth || undefined,
+          termsAccepted: data.termsAccepted || undefined,
+        },
       }),
     onSuccess: (data) => {
       setSession(data.token);
@@ -142,6 +152,30 @@ export function AuthPage() {
               className="w-full rounded-xl border border-tide/30 bg-white px-4 py-3 text-slate-700 outline-none transition focus:border-ember"
               {...signupForm.register("password", { required: true, minLength: 8 })}
             />
+          </label>
+
+          <label className="block space-y-2 text-sm">
+            <span className="font-semibold">Date of Birth</span>
+            <input
+              type="date"
+              className="w-full rounded-xl border border-tide/30 bg-white px-4 py-3 text-slate-700 outline-none transition focus:border-ember"
+              {...signupForm.register("dateOfBirth", { required: true })}
+            />
+            <span className="text-xs text-slate-500">You must be at least 13 years old to use ZeroFans.</span>
+          </label>
+
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 rounded border-tide/30"
+              {...signupForm.register("termsAccepted", { required: true })}
+            />
+            <span className="text-slate-600">
+              I agree to the{" "}
+              <a href="/terms" className="text-ember underline" target="_blank">Terms of Service</a>
+              {" "}and{" "}
+              <a href="/privacy" className="text-ember underline" target="_blank">Privacy Policy</a>
+            </span>
           </label>
 
           <button

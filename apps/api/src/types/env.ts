@@ -1,3 +1,5 @@
+import type { Database } from "../db";
+
 export type UserRole = "user" | "admin";
 
 export interface AuthUser {
@@ -8,7 +10,8 @@ export interface AuthUser {
 }
 
 export interface EnvBindings {
-  DB: D1Database;
+  DB: Database;
+  NEON_CONNECTION_STRING: string;
   MEDIA_BUCKET: R2Bucket;
   JWT_SECRET: string;
   JWT_ISSUER: string;
@@ -26,6 +29,7 @@ export interface EnvBindings {
 
 export interface AppVariables {
   authUser: AuthUser | null;
+  db: Database;
 }
 
 export interface AppEnv {

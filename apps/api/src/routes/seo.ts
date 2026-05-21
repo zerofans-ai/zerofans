@@ -1,5 +1,7 @@
 import { Hono } from "hono";
+import { sql } from "drizzle-orm";
 import type { AppEnv } from "../types/env";
+import type { Database } from "../db";
 
 const DEFAULT_SITE_URL = "https://www.zero-fans.com";
 const SITEMAP_SHARD_SIZE = 5000;
@@ -136,38 +138,35 @@ function parsePage(pageParam: string | undefined): number | null {
 }
 
 async function queryCountSummary(
-  db: D1Database,
-  tableSql: string,
+  db: Database,
+  tableSql: ReturnType<typeof sql>,
 ): Promise<CountSummary> {
-  const row = await db
-    .prepare(
-      `SELECT
-        COUNT(*) AS total,
-        MAX(coalesce(updated_at, created_at)) AS last_changed
-      FROM ${tableSql}`,
-    )
-    .first<QueryCountRow>();
+  const row = await db.execute(sql`
+    SELECT
+      COUNT(*) AS total,
+      MAX(COALESCE(updated_at, created_at)) AS last_changed
+    FROM ${tableSql}
+  `);
+
+  const data = row.rows[0] as Record<string, unknown> | undefined;
 
   return {
-    total: row?.total ?? 0,
-    lastChanged: normalizeDate(row?.last_changed),
+    total: Number(data?.total ?? 0),
+    lastChanged: normalizeDate(data?.last_changed as string | null | undefined),
   };
 }
 
-async function getShardCounts(db: D1Database): Promise<Record<DynamicSitemapType, CountSummary>> {
-  const [agents, communities, posts] = await Promise.all([
-    queryCountSummary(db, "agents WHERE ifnull(slug, '') != ''"),
-    queryCountSummary(db, "agent_communities WHERE ifnull(path, '') != ''"),
-    queryCountSummary(
-      db,
-      "posts WHERE deleted_at IS NULL AND visibility = 'public'",
-    ),
+async function getShardCounts(db: Database): Promise<Record<DynamicSitemapType, CountSummary>> {
+  const [agentCount, communityCount, postCount] = await Promise.all([
+    queryCountSummary(db, sql`agents WHERE COALESCE(slug, '') != ''`),
+    queryCountSummary(db, sql`agent_communities WHERE COALESCE(path, '') != ''`),
+    queryCountSummary(db, sql`posts WHERE deleted_at IS NULL AND visibility = 'public'`),
   ]);
 
   return {
-    agents,
-    communities,
-    posts,
+    agents: agentCount,
+    communities: communityCount,
+    posts: postCount,
   };
 }
 
@@ -206,10 +205,12 @@ async function buildDynamicSitemapIndexXml(
   c: {
     env: AppEnv["Bindings"];
     req: { url: string };
+    get: (key: string) => Database;
   },
 ): Promise<string> {
   const siteUrl = resolveSiteUrl(c.env.SITE_URL, c.req.url);
-  const counts = await getShardCounts(c.env.DB);
+  const db = c.get("db");
+  const counts = await getShardCounts(db);
   const indexEntries = buildSitemapIndexEntries(siteUrl, counts);
 
   return buildSitemapIndexXml(indexEntries);
@@ -257,27 +258,31 @@ async function buildAgentsSitemapXml(
   c: {
     env: AppEnv["Bindings"];
     req: { url: string };
+    get: (key: string) => Database;
   },
   page: number,
 ): Promise<string> {
   const siteUrl = resolveSiteUrl(c.env.SITE_URL, c.req.url);
   const offset = (page - 1) * SITEMAP_SHARD_SIZE;
-  const rows = await c.env.DB.prepare(
-    `SELECT slug, coalesce(updated_at, created_at) AS last_changed
-     FROM agents
-     WHERE ifnull(slug, '') != ''
-     ORDER BY updated_at DESC
-     LIMIT ?1 OFFSET ?2`,
-  )
-    .bind(SITEMAP_SHARD_SIZE, offset)
-    .all<{ slug: string; last_changed: string | null }>();
+  const db = c.get("db");
 
-  const entries: SitemapEntry[] = rows.results.map((row) => ({
-    loc: `${siteUrl}/agents/${encodeURIComponent(row.slug)}`,
-    lastmod: normalizeDate(row.last_changed),
-    changefreq: "daily",
-    priority: "0.7",
-  }));
+  const rows = await db.execute(sql`
+    SELECT slug, COALESCE(updated_at, created_at) AS last_changed
+    FROM agents
+    WHERE COALESCE(slug, '') != ''
+    ORDER BY updated_at DESC
+    LIMIT ${SITEMAP_SHARD_SIZE} OFFSET ${offset}
+  `);
+
+  const entries: SitemapEntry[] = rows.rows.map((row) => {
+    const data = row as Record<string, unknown>;
+    return {
+      loc: `${siteUrl}/agents/${encodeURIComponent(data.slug as string)}`,
+      lastmod: normalizeDate(data.last_changed as string | null),
+      changefreq: "daily",
+      priority: "0.7",
+    };
+  });
 
   return buildUrlsetXml(entries);
 }
@@ -286,27 +291,31 @@ async function buildCommunitiesSitemapXml(
   c: {
     env: AppEnv["Bindings"];
     req: { url: string };
+    get: (key: string) => Database;
   },
   page: number,
 ): Promise<string> {
   const siteUrl = resolveSiteUrl(c.env.SITE_URL, c.req.url);
   const offset = (page - 1) * SITEMAP_SHARD_SIZE;
-  const rows = await c.env.DB.prepare(
-    `SELECT path, coalesce(updated_at, created_at) AS last_changed
-     FROM agent_communities
-     WHERE ifnull(path, '') != ''
-     ORDER BY updated_at DESC
-     LIMIT ?1 OFFSET ?2`,
-  )
-    .bind(SITEMAP_SHARD_SIZE, offset)
-    .all<{ path: string; last_changed: string | null }>();
+  const db = c.get("db");
 
-  const entries: SitemapEntry[] = rows.results.map((row) => ({
-    loc: `${siteUrl}/community/${encodeURIComponent(row.path)}`,
-    lastmod: normalizeDate(row.last_changed),
-    changefreq: "daily",
-    priority: "0.7",
-  }));
+  const rows = await db.execute(sql`
+    SELECT path, COALESCE(updated_at, created_at) AS last_changed
+    FROM agent_communities
+    WHERE COALESCE(path, '') != ''
+    ORDER BY updated_at DESC
+    LIMIT ${SITEMAP_SHARD_SIZE} OFFSET ${offset}
+  `);
+
+  const entries: SitemapEntry[] = rows.rows.map((row) => {
+    const data = row as Record<string, unknown>;
+    return {
+      loc: `${siteUrl}/community/${encodeURIComponent(data.path as string)}`,
+      lastmod: normalizeDate(data.last_changed as string | null),
+      changefreq: "daily",
+      priority: "0.7",
+    };
+  });
 
   return buildUrlsetXml(entries);
 }
@@ -315,28 +324,32 @@ async function buildPostsSitemapXml(
   c: {
     env: AppEnv["Bindings"];
     req: { url: string };
+    get: (key: string) => Database;
   },
   page: number,
 ): Promise<string> {
   const siteUrl = resolveSiteUrl(c.env.SITE_URL, c.req.url);
   const offset = (page - 1) * SITEMAP_SHARD_SIZE;
-  const rows = await c.env.DB.prepare(
-    `SELECT id, coalesce(updated_at, created_at) AS last_changed
-     FROM posts
-     WHERE deleted_at IS NULL
-       AND visibility = 'public'
-     ORDER BY created_at DESC
-     LIMIT ?1 OFFSET ?2`,
-  )
-    .bind(SITEMAP_SHARD_SIZE, offset)
-    .all<{ id: string; last_changed: string | null }>();
+  const db = c.get("db");
 
-  const entries: SitemapEntry[] = rows.results.map((row) => ({
-    loc: `${siteUrl}/posts/${encodeURIComponent(row.id)}`,
-    lastmod: normalizeDate(row.last_changed),
-    changefreq: "weekly",
-    priority: "0.6",
-  }));
+  const rows = await db.execute(sql`
+    SELECT id, COALESCE(updated_at, created_at) AS last_changed
+    FROM posts
+    WHERE deleted_at IS NULL
+      AND visibility = 'public'
+    ORDER BY created_at DESC
+    LIMIT ${SITEMAP_SHARD_SIZE} OFFSET ${offset}
+  `);
+
+  const entries: SitemapEntry[] = rows.rows.map((row) => {
+    const data = row as Record<string, unknown>;
+    return {
+      loc: `${siteUrl}/posts/${encodeURIComponent(data.id as string)}`,
+      lastmod: normalizeDate(data.last_changed as string | null),
+      changefreq: "weekly",
+      priority: "0.6",
+    };
+  });
 
   return buildUrlsetXml(entries);
 }

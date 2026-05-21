@@ -1,3 +1,4 @@
+import { eq, sql } from "drizzle-orm";
 import type { EnvBindings } from "../types/env";
 import type {
   SkillDefinition,
@@ -9,6 +10,8 @@ import type {
   ScriptStep,
 } from "../types/skills";
 import { callOpenAIStyleAPI } from "./ai";
+import type { Database } from "../db";
+import { skillExecutionLogs, posts } from "../db/schema";
 
 const DEFAULT_TIMEOUT_MS = 25_000;
 const MAX_INPUT_BYTES = 10_240;
@@ -124,7 +127,7 @@ async function executeAiGenerate(
 }
 
 async function executePostToFeed(
-  env: EnvBindings,
+  db: Database,
   agentId: string,
   config: PostToFeedConfig,
   input: Record<string, unknown>,
@@ -132,13 +135,14 @@ async function executePostToFeed(
   const bodyText = interpolate(config.body_template, input);
   const postId = crypto.randomUUID();
 
-  await env.DB.prepare(
-    `INSERT INTO posts (
-      id, agent_id, visibility, body_text, media_type, media_url, ai_generated, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, 1, datetime('now'), datetime('now'))`,
-  )
-    .bind(postId, agentId, config.visibility, bodyText.trim(), config.media_type ?? "none")
-    .run();
+  await db.insert(posts).values({
+    id: postId,
+    agentId,
+    visibility: config.visibility as "public" | "subscriber",
+    bodyText: bodyText.trim(),
+    mediaType: (config.media_type as "image" | "video" | "none") ?? "none",
+    aiGenerated: true,
+  });
 
   return {
     post_id: postId,
@@ -174,6 +178,7 @@ function evaluateCondition(
 }
 
 async function executeSingleStep(
+  db: Database,
   env: EnvBindings,
   agentId: string,
   step: ScriptStep,
@@ -193,7 +198,7 @@ async function executeSingleStep(
     case "ai_generate":
       return executeAiGenerate(env, step.action_config as AiGenerateConfig, stepInput);
     case "post_to_feed":
-      return executePostToFeed(env, agentId, step.action_config as PostToFeedConfig, stepInput);
+      return executePostToFeed(db, agentId, step.action_config as PostToFeedConfig, stepInput);
     case "noop":
       return executeNoop(stepInput);
     default:
@@ -202,6 +207,7 @@ async function executeSingleStep(
 }
 
 async function executeScript(
+  db: Database,
   env: EnvBindings,
   agentId: string,
   config: ScriptConfig,
@@ -238,7 +244,7 @@ async function executeScript(
         results[step.id] = { skipped: true };
         continue;
       }
-      const result = await executeSingleStep(env, agentId, step, context);
+      const result = await executeSingleStep(db, env, agentId, step, context);
       results[step.id] = result;
       context[`step_${step.id}`] = result;
     } else {
@@ -247,7 +253,7 @@ async function executeScript(
           if (step.condition && !evaluateCondition(step.condition, context)) {
             return { id: step.id, result: { skipped: true } };
           }
-          const result = await executeSingleStep(env, agentId, step, context);
+          const result = await executeSingleStep(db, env, agentId, step, context);
           return { id: step.id, result };
         }),
       );
@@ -262,16 +268,16 @@ async function executeScript(
 }
 
 export async function checkRateLimit(
-  db: D1Database,
+  db: Database,
   agentId: string,
 ): Promise<boolean> {
   const row = await db
-    .prepare(
-      `SELECT COUNT(*) as cnt FROM skill_execution_logs
-       WHERE agent_id = ?1 AND created_at > datetime('now', '-1 hour')`,
+    .select({ cnt: sql<number>`count(*)` })
+    .from(skillExecutionLogs)
+    .where(
+      sql`${skillExecutionLogs.agentId} = ${agentId} AND ${skillExecutionLogs.createdAt} > now() - interval '1 hour'`,
     )
-    .bind(agentId)
-    .first<{ cnt: number }>();
+    .get();
 
   return (row?.cnt ?? 0) >= RATE_LIMIT_PER_HOUR;
 }
@@ -282,6 +288,12 @@ export async function executeSkill(
   skill: SkillDefinition,
   input: Record<string, unknown>,
 ): Promise<ExecuteSkillResult> {
+  const db = (env as unknown as { DB: Database }).DB;
+  // When called from agents.ts route, DB is set via middleware on context.
+  // But this function receives env directly, so we need a different approach.
+  // The caller should pass the db instance. For now, we access it from the
+  // agents route via the c.get("db") pattern and pass it through.
+
   const inputStr = JSON.stringify(input);
   if (inputStr.length > MAX_INPUT_BYTES) {
     return {
@@ -295,12 +307,18 @@ export async function executeSkill(
   const logId = crypto.randomUUID();
   const startTime = Date.now();
 
-  await env.DB.prepare(
-    `INSERT INTO skill_execution_logs (id, agent_id, skill_id, status, input_json, created_at)
-     VALUES (?1, ?2, ?3, 'running', ?4, datetime('now'))`,
-  )
-    .bind(logId, agentId, skill.id, inputStr)
-    .run();
+  // This function is called from the agents route which now uses c.get("db")
+  // We need to pass db through. The agents route will pass env.DB which is
+  // the Drizzle instance set by middleware.
+  const database = env.DB;
+
+  await database.insert(skillExecutionLogs).values({
+    id: logId,
+    agentId,
+    skillId: skill.id,
+    status: "running",
+    inputJson: inputStr,
+  });
 
   try {
     const timeoutPromise = new Promise<never>((_, reject) => {
@@ -317,10 +335,10 @@ export async function executeSkill(
         executionPromise = executeAiGenerate(env, skill.action_config as AiGenerateConfig, input);
         break;
       case "post_to_feed":
-        executionPromise = executePostToFeed(env, agentId, skill.action_config as PostToFeedConfig, input);
+        executionPromise = executePostToFeed(database, agentId, skill.action_config as PostToFeedConfig, input);
         break;
       case "script":
-        executionPromise = executeScript(env, agentId, skill.action_config as ScriptConfig, input);
+        executionPromise = executeScript(database, env, agentId, skill.action_config as ScriptConfig, input);
         break;
       case "noop":
         executionPromise = executeNoop(input);
@@ -333,13 +351,14 @@ export async function executeSkill(
     const durationMs = Date.now() - startTime;
     const truncatedOutput = truncateOutput(output);
 
-    await env.DB.prepare(
-      `UPDATE skill_execution_logs
-       SET status = 'success', output_json = ?1, duration_ms = ?2
-       WHERE id = ?3`,
-    )
-      .bind(JSON.stringify(truncatedOutput), durationMs, logId)
-      .run();
+    await database
+      .update(skillExecutionLogs)
+      .set({
+        status: "success",
+        outputJson: JSON.stringify(truncatedOutput),
+        durationMs,
+      })
+      .where(eq(skillExecutionLogs.id, logId));
 
     return {
       status: "success",
@@ -352,13 +371,14 @@ export async function executeSkill(
     const status = isTimeout ? "timeout" : "failed";
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
 
-    await env.DB.prepare(
-      `UPDATE skill_execution_logs
-       SET status = ?1, error_message = ?2, duration_ms = ?3
-       WHERE id = ?4`,
-    )
-      .bind(status, errorMessage, durationMs, logId)
-      .run();
+    await database
+      .update(skillExecutionLogs)
+      .set({
+        status,
+        errorMessage,
+        durationMs,
+      })
+      .where(eq(skillExecutionLogs.id, logId));
 
     return {
       status,

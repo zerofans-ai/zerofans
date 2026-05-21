@@ -1,10 +1,20 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { eq, sql, and, desc, isNull } from "drizzle-orm";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { scoreFeedItem } from "../lib/feed-score";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
+import {
+  agents,
+  posts,
+  likes,
+  comments,
+  follows,
+  subscriptions,
+  agentRelationships,
+} from "../db/schema";
 
 const mediaUrlSchema = z
   .string()
@@ -30,13 +40,15 @@ const updatePostSchema = z.object({
 });
 
 async function getAgentOwner(
-  db: D1Database,
+  db: ReturnType<typeof import("../db")["createDb"]>,
   agentId: string,
-): Promise<{ owner_user_id: string } | null> {
-  return db
-    .prepare("SELECT owner_user_id FROM agents WHERE id = ?1 LIMIT 1")
-    .bind(agentId)
-    .first<{ owner_user_id: string }>();
+): Promise<{ ownerUserId: string } | null> {
+  const row = await db
+    .select({ ownerUserId: agents.ownerUserId })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .get();
+  return row ?? null;
 }
 
 export const postsRoutes = new Hono<AppEnv>();
@@ -53,31 +65,27 @@ postsRoutes.post("/", requireAuth, async (c) => {
     return badRequest(c, "Invalid post payload");
   }
 
-  const owner = await getAgentOwner(c.env.DB, parsed.data.agentId);
+  const db = c.get("db");
+  const owner = await getAgentOwner(db, parsed.data.agentId);
   if (!owner) {
     return notFound(c, "Agent not found");
   }
 
-  const canCreate = owner.owner_user_id === authUser.id || authUser.role === "admin";
+  const canCreate = owner.ownerUserId === authUser.id || authUser.role === "admin";
   if (!canCreate) {
     return forbidden(c, "You can only post for your own agent");
   }
 
   const postId = crypto.randomUUID();
-  await c.env.DB.prepare(
-    `INSERT INTO posts (
-      id, agent_id, visibility, body_text, media_type, media_url, ai_generated, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, datetime('now'), datetime('now'))`,
-  )
-    .bind(
-      postId,
-      parsed.data.agentId,
-      parsed.data.visibility,
-      parsed.data.bodyText.trim(),
-      parsed.data.mediaType,
-      parsed.data.mediaUrl ?? null,
-    )
-    .run();
+  await db.insert(posts).values({
+    id: postId,
+    agentId: parsed.data.agentId,
+    visibility: parsed.data.visibility,
+    bodyText: parsed.data.bodyText.trim(),
+    mediaType: parsed.data.mediaType,
+    mediaUrl: parsed.data.mediaUrl ?? null,
+    aiGenerated: false,
+  });
 
   return c.json({ id: postId });
 });
@@ -94,61 +102,53 @@ postsRoutes.patch("/:postId", requireAuth, async (c) => {
     return badRequest(c, "Invalid post update payload");
   }
 
-  const post = await c.env.DB.prepare(
-    `SELECT p.id, p.agent_id, p.body_text, p.media_type, p.media_url, a.owner_user_id
-     FROM posts p
-     JOIN agents a ON a.id = p.agent_id
-     WHERE p.id = ?1 AND p.deleted_at IS NULL
-     LIMIT 1`,
-  )
-    .bind(c.req.param("postId"))
-    .first<{
-      id: string;
-      agent_id: string;
-      body_text: string;
-      media_type: "image" | "video" | "none";
-      media_url: string | null;
-      owner_user_id: string;
-    }>();
+  const db = c.get("db");
+  const postId = c.req.param("postId");
+
+  const post = await db
+    .select({
+      id: posts.id,
+      agentId: posts.agentId,
+      bodyText: posts.bodyText,
+      mediaType: posts.mediaType,
+      mediaUrl: posts.mediaUrl,
+      ownerUserId: agents.ownerUserId,
+    })
+    .from(posts)
+    .innerJoin(agents, eq(agents.id, posts.agentId))
+    .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
+    .get();
 
   if (!post) {
     return notFound(c, "Post not found");
   }
 
-  const canEdit = post.owner_user_id === authUser.id || authUser.role === "admin";
+  const canEdit = post.ownerUserId === authUser.id || authUser.role === "admin";
   if (!canEdit) {
     return forbidden(c);
   }
 
-  const updates: string[] = [];
-  const values: (string | null)[] = [];
+  const updates: Partial<typeof posts.$inferInsert> = {};
 
   if (parsed.data.visibility !== undefined) {
-    updates.push("visibility = ?");
-    values.push(parsed.data.visibility);
+    updates.visibility = parsed.data.visibility;
   }
   if (parsed.data.bodyText !== undefined) {
-    updates.push("body_text = ?");
-    values.push(parsed.data.bodyText.trim());
+    updates.bodyText = parsed.data.bodyText.trim();
   }
   if (parsed.data.mediaType !== undefined) {
-    updates.push("media_type = ?");
-    values.push(parsed.data.mediaType);
+    updates.mediaType = parsed.data.mediaType;
   }
   if (parsed.data.mediaUrl !== undefined) {
-    updates.push("media_url = ?");
-    values.push(parsed.data.mediaUrl);
+    updates.mediaUrl = parsed.data.mediaUrl;
   }
 
-  if (updates.length === 0) {
+  if (Object.keys(updates).length === 0) {
     return badRequest(c, "No fields to update");
   }
 
-  updates.push("updated_at = datetime('now')");
-  const sql = `UPDATE posts SET ${updates.join(", ")} WHERE id = ?`;
-  await c.env.DB.prepare(sql)
-    .bind(...values, post.id)
-    .run();
+  updates.updatedAt = sql`now()`;
+  await db.update(posts).set(updates).where(eq(posts.id, post.id));
 
   return c.json({ success: true });
 });
@@ -159,30 +159,35 @@ postsRoutes.delete("/:postId", requireAuth, async (c) => {
     return unauthorized(c);
   }
 
-  const post = await c.env.DB.prepare(
-    `SELECT p.id, a.owner_user_id
-     FROM posts p
-     JOIN agents a ON a.id = p.agent_id
-     WHERE p.id = ?1 AND p.deleted_at IS NULL
-     LIMIT 1`,
-  )
-    .bind(c.req.param("postId"))
-    .first<{ id: string; owner_user_id: string }>();
+  const db = c.get("db");
+  const postId = c.req.param("postId");
+
+  const post = await db
+    .select({
+      id: posts.id,
+      ownerUserId: agents.ownerUserId,
+    })
+    .from(posts)
+    .innerJoin(agents, eq(agents.id, posts.agentId))
+    .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
+    .get();
 
   if (!post) {
     return notFound(c, "Post not found");
   }
 
-  const canDelete = post.owner_user_id === authUser.id || authUser.role === "admin";
+  const canDelete = post.ownerUserId === authUser.id || authUser.role === "admin";
   if (!canDelete) {
     return forbidden(c);
   }
 
-  await c.env.DB.prepare(
-    "UPDATE posts SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
-  )
-    .bind(post.id)
-    .run();
+  await db
+    .update(posts)
+    .set({
+      deletedAt: sql`now()`,
+      updatedAt: sql`now()`,
+    })
+    .where(eq(posts.id, post.id));
 
   return c.json({ success: true });
 });
@@ -196,28 +201,30 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
   const pageSize = Math.min(50, Math.max(1, Number(c.req.query("pageSize") ?? 20)));
   const offset = (page - 1) * pageSize;
 
+  const db = c.get("db");
+
   if (actingAgentId) {
     if (!authUser) {
       return unauthorized(c, "Authentication required for agent feed mode");
     }
 
-    const actor = await c.env.DB.prepare(
-      "SELECT id, owner_user_id FROM agents WHERE id = ?1 LIMIT 1",
-    )
-      .bind(actingAgentId)
-      .first<{ id: string; owner_user_id: string }>();
+    const actor = await db
+      .select({ id: agents.id, ownerUserId: agents.ownerUserId })
+      .from(agents)
+      .where(eq(agents.id, actingAgentId))
+      .get();
 
     if (!actor) {
       return notFound(c, "Acting agent not found");
     }
 
-    const canAccessActor = authUser.role === "admin" || actor.owner_user_id === authUser.id;
+    const canAccessActor = authUser.role === "admin" || actor.ownerUserId === authUser.id;
     if (!canAccessActor) {
       return forbidden(c, "You can only view feed as an agent you own");
     }
 
-    const rows = await c.env.DB.prepare(
-      `SELECT
+    const rows = await db.execute(sql`
+      SELECT
         p.id,
         p.agent_id,
         p.body_text,
@@ -228,46 +235,38 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
         p.created_at,
         a.name AS agent_name,
         a.slug AS agent_slug,
-        (
-          SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id
-        ) AS likes_count,
-        (
-          SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id
-        ) AS comments_count,
-        (
-          CASE
-            WHEN p.agent_id = ?1 THEN 1
-            WHEN EXISTS (
-              SELECT 1 FROM agent_relationships ar
-              WHERE ar.source_agent_id = ?1
-                AND ar.target_agent_id = p.agent_id
-                AND ar.relationship_type = 'follow'
-                AND ar.status = 'active'
-            ) THEN 1
-            ELSE 0
-          END
-        ) AS is_followed_agent,
-        (
-          CASE
-            WHEN p.agent_id = ?1 THEN 1
-            WHEN EXISTS (
-              SELECT 1 FROM agent_relationships ar
-              WHERE ar.source_agent_id = ?1
-                AND ar.target_agent_id = p.agent_id
-                AND ar.relationship_type = 'subscribe'
-                AND ar.status = 'active'
-            ) THEN 1
-            ELSE 0
-          END
-        ) AS has_subscribed_agent
+        (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes_count,
+        (SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id) AS comments_count,
+        (CASE
+          WHEN p.agent_id = ${actingAgentId} THEN true
+          WHEN EXISTS (
+            SELECT 1 FROM agent_relationships ar
+            WHERE ar.source_agent_id = ${actingAgentId}
+              AND ar.target_agent_id = p.agent_id
+              AND ar.relationship_type = 'follow'
+              AND ar.status = 'active'
+          ) THEN true
+          ELSE false
+        END) AS is_followed_agent,
+        (CASE
+          WHEN p.agent_id = ${actingAgentId} THEN true
+          WHEN EXISTS (
+            SELECT 1 FROM agent_relationships ar
+            WHERE ar.source_agent_id = ${actingAgentId}
+              AND ar.target_agent_id = p.agent_id
+              AND ar.relationship_type = 'subscribe'
+              AND ar.status = 'active'
+          ) THEN true
+          ELSE false
+        END) AS has_subscribed_agent
       FROM posts p
       JOIN agents a ON a.id = p.agent_id
       WHERE p.deleted_at IS NULL
         AND (
-          p.agent_id = ?1
+          p.agent_id = ${actingAgentId}
           OR EXISTS (
             SELECT 1 FROM agent_relationships ar
-            WHERE ar.source_agent_id = ?1
+            WHERE ar.source_agent_id = ${actingAgentId}
               AND ar.target_agent_id = p.agent_id
               AND ar.status = 'active'
               AND (
@@ -277,44 +276,27 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
           )
         )
       ORDER BY p.created_at DESC
-      LIMIT ?2 OFFSET ?3`,
-    )
-      .bind(actingAgentId, pageSize, offset)
-      .all<{
-        id: string;
-        agent_id: string;
-        body_text: string;
-        media_type: "image" | "video" | "none";
-        media_url: string | null;
-        visibility: "public" | "subscriber";
-        ai_generated: number;
-        created_at: string;
-        agent_name: string;
-        agent_slug: string;
-        likes_count: number;
-        comments_count: number;
-        is_followed_agent: number;
-        has_subscribed_agent: number;
-      }>();
+      LIMIT ${pageSize} OFFSET ${offset}
+    `);
 
-    let sorted = rows.results.map((row) => ({
+    let sorted = rows.rows.map((row: Record<string, unknown>) => ({
       ...row,
       score: scoreFeedItem({
-        createdAt: row.created_at,
-        likesCount: row.likes_count ?? 0,
-        commentsCount: row.comments_count ?? 0,
+        createdAt: row.created_at as string,
+        likesCount: (row.likes_count as number) ?? 0,
+        commentsCount: (row.comments_count as number) ?? 0,
         isFollowedAgent: Boolean(row.is_followed_agent),
       }),
     }));
 
     if (sort === "recent") {
-      sorted = sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      sorted = sorted.sort((a, b) => new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime());
     } else if (sort === "most-liked") {
-      sorted = sorted.sort((a, b) => (b.likes_count ?? 0) - (a.likes_count ?? 0));
+      sorted = sorted.sort((a, b) => ((b.likes_count as number) ?? 0) - ((a.likes_count as number) ?? 0));
     } else if (sort === "most-discussed") {
-      sorted = sorted.sort((a, b) => (b.comments_count ?? 0) - (a.comments_count ?? 0));
+      sorted = sorted.sort((a, b) => ((b.comments_count as number) ?? 0) - ((a.comments_count as number) ?? 0));
     } else {
-      sorted = sorted.sort((a, b) => b.score - a.score);
+      sorted = sorted.sort((a, b) => (b.score as number) - (a.score as number));
     }
 
     return c.json({
@@ -327,15 +309,18 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
     });
   }
 
-  const followingFilter = filter === "following" && authUser
-    ? `AND EXISTS (
-        SELECT 1 FROM follows f
-        WHERE f.user_id = ?1 AND f.agent_id = p.agent_id
-      )`
-    : "";
+  // User feed
+  const authUserId = authUser?.id ?? null;
+  const followingFilter =
+    filter === "following" && authUser
+      ? sql`AND EXISTS (
+          SELECT 1 FROM follows f
+          WHERE f.user_id = ${authUserId} AND f.agent_id = p.agent_id
+        )`
+      : sql``;
 
-  const rows = await c.env.DB.prepare(
-    `SELECT
+  const rows = await db.execute(sql`
+    SELECT
       p.id,
       p.agent_id,
       p.body_text,
@@ -346,34 +331,26 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
       p.created_at,
       a.name AS agent_name,
       a.slug AS agent_slug,
-      (
-        SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id
-      ) AS likes_count,
-      (
-        SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id
-      ) AS comments_count,
-      (
-        CASE
-          WHEN ?1 IS NULL THEN 0
-          WHEN EXISTS (
-            SELECT 1 FROM follows f
-            WHERE f.user_id = ?1 AND f.agent_id = p.agent_id
-          ) THEN 1
-          ELSE 0
-        END
-      ) AS is_followed_agent,
-      (
-        CASE
-          WHEN ?1 IS NULL THEN 0
-          WHEN EXISTS (
-            SELECT 1 FROM subscriptions s2
-            WHERE s2.user_id = ?1
-              AND s2.agent_id = p.agent_id
-              AND s2.status = 'active'
-          ) THEN 1
-          ELSE 0
-        END
-      ) AS has_subscribed_agent
+      (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes_count,
+      (SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id) AS comments_count,
+      (CASE
+        WHEN ${authUserId} IS NULL THEN false
+        WHEN EXISTS (
+          SELECT 1 FROM follows f
+          WHERE f.user_id = ${authUserId} AND f.agent_id = p.agent_id
+        ) THEN true
+        ELSE false
+      END) AS is_followed_agent,
+      (CASE
+        WHEN ${authUserId} IS NULL THEN false
+        WHEN EXISTS (
+          SELECT 1 FROM subscriptions s2
+          WHERE s2.user_id = ${authUserId}
+            AND s2.agent_id = p.agent_id
+            AND s2.status = 'active'
+        ) THEN true
+        ELSE false
+      END) AS has_subscribed_agent
     FROM posts p
     JOIN agents a ON a.id = p.agent_id
     WHERE p.deleted_at IS NULL
@@ -381,54 +358,37 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
       AND (
         p.visibility = 'public'
         OR (
-          ?1 IS NOT NULL
+          ${authUserId} IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM subscriptions s
-            WHERE s.user_id = ?1
+            WHERE s.user_id = ${authUserId}
               AND s.agent_id = p.agent_id
               AND s.status = 'active'
           )
         )
       )
     ORDER BY p.created_at DESC
-    LIMIT ?2 OFFSET ?3`,
-  )
-    .bind(authUser?.id ?? null, pageSize, offset)
-    .all<{
-      id: string;
-      agent_id: string;
-      body_text: string;
-      media_type: "image" | "video" | "none";
-      media_url: string | null;
-      visibility: "public" | "subscriber";
-      ai_generated: number;
-      created_at: string;
-      agent_name: string;
-      agent_slug: string;
-      likes_count: number;
-      comments_count: number;
-      is_followed_agent: number;
-      has_subscribed_agent: number;
-    }>();
+    LIMIT ${pageSize} OFFSET ${offset}
+  `);
 
-  let sorted = rows.results.map((row) => ({
+  let sorted = rows.rows.map((row: Record<string, unknown>) => ({
     ...row,
     score: scoreFeedItem({
-      createdAt: row.created_at,
-      likesCount: row.likes_count ?? 0,
-      commentsCount: row.comments_count ?? 0,
+      createdAt: row.created_at as string,
+      likesCount: (row.likes_count as number) ?? 0,
+      commentsCount: (row.comments_count as number) ?? 0,
       isFollowedAgent: Boolean(row.is_followed_agent),
     }),
   }));
 
   if (sort === "recent") {
-    sorted = sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    sorted = sorted.sort((a, b) => new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime());
   } else if (sort === "most-liked") {
-    sorted = sorted.sort((a, b) => (b.likes_count ?? 0) - (a.likes_count ?? 0));
+    sorted = sorted.sort((a, b) => ((b.likes_count as number) ?? 0) - ((a.likes_count as number) ?? 0));
   } else if (sort === "most-discussed") {
-    sorted = sorted.sort((a, b) => (b.comments_count ?? 0) - (a.comments_count ?? 0));
+    sorted = sorted.sort((a, b) => ((b.comments_count as number) ?? 0) - ((a.comments_count as number) ?? 0));
   } else {
-    sorted = sorted.sort((a, b) => b.score - a.score);
+    sorted = sorted.sort((a, b) => (b.score as number) - (a.score as number));
   }
 
   return c.json({
@@ -444,9 +404,11 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
 postsRoutes.get("/:postId", optionalAuth, async (c) => {
   const authUser = c.get("authUser");
   const postId = c.req.param("postId");
+  const db = c.get("db");
+  const authUserId = authUser?.id ?? null;
 
-  const post = await c.env.DB.prepare(
-    `SELECT
+  const post = await db.execute(sql`
+    SELECT
       p.id,
       p.agent_id,
       p.body_text,
@@ -458,69 +420,47 @@ postsRoutes.get("/:postId", optionalAuth, async (c) => {
       a.name AS agent_name,
       a.slug AS agent_slug,
       a.owner_user_id,
-      (
-        SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id
-      ) AS likes_count,
-      (
-        SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id
-      ) AS comments_count,
-      (
-        CASE
-          WHEN ?2 IS NULL THEN 0
-          WHEN EXISTS (
-            SELECT 1 FROM follows f
-            WHERE f.user_id = ?2 AND f.agent_id = p.agent_id
-          ) THEN 1
-          ELSE 0
-        END
-      ) AS is_followed_agent,
-      (
-        CASE
-          WHEN ?2 IS NULL THEN 0
-          WHEN EXISTS (
-            SELECT 1 FROM subscriptions s
-            WHERE s.user_id = ?2
-              AND s.agent_id = p.agent_id
-              AND s.status = 'active'
-          ) THEN 1
-          ELSE 0
-        END
-      ) AS has_subscribed_agent
+      (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes_count,
+      (SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id) AS comments_count,
+      (CASE
+        WHEN ${authUserId} IS NULL THEN false
+        WHEN EXISTS (
+          SELECT 1 FROM follows f
+          WHERE f.user_id = ${authUserId} AND f.agent_id = p.agent_id
+        ) THEN true
+        ELSE false
+      END) AS is_followed_agent,
+      (CASE
+        WHEN ${authUserId} IS NULL THEN false
+        WHEN EXISTS (
+          SELECT 1 FROM subscriptions s
+          WHERE s.user_id = ${authUserId}
+            AND s.agent_id = p.agent_id
+            AND s.status = 'active'
+        ) THEN true
+        ELSE false
+      END) AS has_subscribed_agent
     FROM posts p
     JOIN agents a ON a.id = p.agent_id
-    WHERE p.id = ?1
+    WHERE p.id = ${postId}
       AND p.deleted_at IS NULL
-    LIMIT 1`,
-  )
-    .bind(postId, authUser?.id ?? null)
-    .first<{
-      id: string;
-      agent_id: string;
-      body_text: string;
-      media_type: "image" | "video" | "none";
-      media_url: string | null;
-      visibility: "public" | "subscriber";
-      ai_generated: number;
-      created_at: string;
-      agent_name: string;
-      agent_slug: string;
-      owner_user_id: string;
-      likes_count: number;
-      comments_count: number;
-      is_followed_agent: number;
-      has_subscribed_agent: number;
-    }>();
+    LIMIT 1
+  `);
 
-  if (!post) {
+  const row = post.rows[0] as
+    | Record<string, unknown>
+    | undefined;
+
+  if (!row) {
     return notFound(c, "Post not found");
   }
 
-  if (post.visibility === "subscriber") {
+  if (row.visibility === "subscriber") {
     const canView =
       Boolean(authUser) &&
       (authUser?.role === "admin" ||
-        authUser?.id === post.owner_user_id ||
-        Boolean(post.has_subscribed_agent));
+        authUser?.id === (row.owner_user_id as string) ||
+        Boolean(row.has_subscribed_agent));
 
     if (!canView) {
       return forbidden(c, "This post is only visible to subscribers");
@@ -529,20 +469,20 @@ postsRoutes.get("/:postId", optionalAuth, async (c) => {
 
   return c.json({
     post: {
-      id: post.id,
-      agent_id: post.agent_id,
-      body_text: post.body_text,
-      media_type: post.media_type,
-      media_url: post.media_url,
-      visibility: post.visibility,
-      ai_generated: post.ai_generated,
-      created_at: post.created_at,
-      agent_name: post.agent_name,
-      agent_slug: post.agent_slug,
-      likes_count: post.likes_count ?? 0,
-      comments_count: post.comments_count ?? 0,
-      is_followed_agent: post.is_followed_agent ?? 0,
-      has_subscribed_agent: post.has_subscribed_agent ?? 0,
+      id: row.id,
+      agent_id: row.agent_id,
+      body_text: row.body_text,
+      media_type: row.media_type,
+      media_url: row.media_url,
+      visibility: row.visibility,
+      ai_generated: row.ai_generated,
+      created_at: row.created_at,
+      agent_name: row.agent_name,
+      agent_slug: row.agent_slug,
+      likes_count: (row.likes_count as number) ?? 0,
+      comments_count: (row.comments_count as number) ?? 0,
+      is_followed_agent: row.is_followed_agent ?? false,
+      has_subscribed_agent: row.has_subscribed_agent ?? false,
     },
   });
 });
@@ -550,55 +490,49 @@ postsRoutes.get("/:postId", optionalAuth, async (c) => {
 postsRoutes.get("/agents/:agentId/posts", optionalAuth, async (c) => {
   const authUser = c.get("authUser");
   const agentId = c.req.param("agentId");
+  const db = c.get("db");
 
-  const owner = await getAgentOwner(c.env.DB, agentId);
+  const owner = await getAgentOwner(db, agentId);
   if (!owner) {
     return notFound(c, "Agent not found");
   }
 
   let canSeeSubscriberPosts = false;
   if (authUser) {
-    if (authUser.role === "admin" || authUser.id === owner.owner_user_id) {
+    if (authUser.role === "admin" || authUser.id === owner.ownerUserId) {
       canSeeSubscriberPosts = true;
     } else {
-      const subscription = await c.env.DB.prepare(
-        `SELECT id FROM subscriptions
-         WHERE user_id = ?1 AND agent_id = ?2 AND status = 'active' LIMIT 1`,
-      )
-        .bind(authUser.id, agentId)
-        .first<{ id: string }>();
+      const subscription = await db
+        .select({ id: subscriptions.id })
+        .from(subscriptions)
+        .where(
+          and(
+            eq(subscriptions.userId, authUser.id),
+            eq(subscriptions.agentId, agentId),
+            eq(subscriptions.status, "active"),
+          ),
+        )
+        .get();
       canSeeSubscriberPosts = Boolean(subscription);
     }
   }
 
-  const visibilityClause = canSeeSubscriberPosts
-    ? "p.visibility IN ('public', 'subscriber')"
-    : "p.visibility = 'public'";
+  const visibilityCondition = canSeeSubscriberPosts
+    ? sql`(${posts.visibility} IN ('public', 'subscriber'))`
+    : sql`(${posts.visibility} = 'public')`;
 
-  const rows = await c.env.DB.prepare(
-    `SELECT
+  const rows = await db.execute(sql`
+    SELECT
       p.id, p.body_text, p.media_type, p.media_url, p.visibility, p.ai_generated, p.created_at,
       (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes_count,
       (SELECT COUNT(*) FROM comments c2 WHERE c2.post_id = p.id) AS comments_count
     FROM posts p
-    WHERE p.agent_id = ?1
+    WHERE p.agent_id = ${agentId}
       AND p.deleted_at IS NULL
-      AND ${visibilityClause}
+      AND ${visibilityCondition}
     ORDER BY p.created_at DESC
-    LIMIT 50`,
-  )
-    .bind(agentId)
-    .all<{
-      id: string;
-      body_text: string;
-      media_type: "image" | "video" | "none";
-      media_url: string | null;
-      visibility: "public" | "subscriber";
-      ai_generated: number;
-      created_at: string;
-      likes_count: number;
-      comments_count: number;
-    }>();
+    LIMIT 50
+  `);
 
-  return c.json({ items: rows.results });
+  return c.json({ items: rows.rows });
 });

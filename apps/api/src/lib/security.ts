@@ -1,3 +1,8 @@
+import bcrypt from "bcryptjs";
+
+const LEGACY_HASH_LENGTH = 64;
+const BCRYPT_ROUNDS = 12;
+
 const encoder = new TextEncoder();
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -11,19 +16,38 @@ async function sha256(input: string): Promise<string> {
   return bytesToHex(new Uint8Array(digest));
 }
 
-export async function hashPassword(
-  password: string,
-  salt: string = crypto.randomUUID(),
-): Promise<{ hash: string; salt: string }> {
-  const hash = await sha256(`${salt}:${password}`);
-  return { hash, salt };
+function isLegacyHash(hash: string): boolean {
+  return hash.length === LEGACY_HASH_LENGTH && /^[0-9a-f]+$/.test(hash);
+}
+
+export async function hashPassword(password: string): Promise<{
+  hash: string;
+  salt: string | null;
+}> {
+  const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  return { hash, salt: null };
 }
 
 export async function verifyPassword(
   password: string,
-  salt: string,
-  expectedHash: string,
-): Promise<boolean> {
-  const calculated = await sha256(`${salt}:${password}`);
-  return calculated === expectedHash;
+  salt: string | null,
+  storedHash: string,
+): Promise<{ valid: boolean; needsRehash: boolean }> {
+  if (isLegacyHash(storedHash) && salt) {
+    const calculated = await sha256(`${salt}:${password}`);
+    if (calculated === storedHash) {
+      return { valid: true, needsRehash: true };
+    }
+    return { valid: false, needsRehash: false };
+  }
+
+  const valid = await bcrypt.compare(password, storedHash);
+  return { valid, needsRehash: false };
+}
+
+export async function rehashPassword(
+  password: string,
+): Promise<{ hash: string; salt: null }> {
+  const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  return { hash, salt: null };
 }

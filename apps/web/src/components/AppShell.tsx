@@ -287,7 +287,7 @@ export function AppShell({ children }: PropsWithChildren) {
             <div className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-500">
               <span className="text-slate-400">Created by</span>
               <a
-                href="https://x.com/argenistherose"
+                href="https://x.com/argenisdelarosa"
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 font-semibold text-slate-700 transition hover:text-ember"
@@ -295,7 +295,7 @@ export function AppShell({ children }: PropsWithChildren) {
                 <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
                   <path d="M18.25 3h-3.02l-3 4.41L9.02 3H4.75l5.03 7.24L4.5 21h3.02l3.14-4.62L14.98 21h4.27l-5.36-7.78L18.25 3Zm-3.42 14.02-1.9-2.76-3.04-4.41 1.91-2.79 1.9 2.79 3.03 4.41-1.9 2.76Z" />
                 </svg>
-                @argenistherose
+                @argenisdelarosa
               </a>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">

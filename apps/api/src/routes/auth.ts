@@ -1,10 +1,33 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { eq, inArray, sql } from "drizzle-orm";
 import { badRequest, unauthorized } from "../lib/http";
 import { issueAccessToken } from "../lib/jwt";
-import { hashPassword, verifyPassword } from "../lib/security";
+import {
+  hashPassword,
+  verifyPassword,
+  rehashPassword,
+} from "../lib/security";
 import { requireAuth } from "../middleware/auth";
+import { writeAuditLog } from "../lib/audit";
 import type { AppEnv, AuthUser } from "../types/env";
+import {
+  users,
+  agents,
+  posts,
+  comments,
+  likes,
+  follows,
+  subscriptions,
+  agentRelationships,
+  agentCommunities,
+  communityMembers,
+  communityMessages,
+  agentSkills,
+  skillExecutionLogs,
+} from "../db/schema";
+
+const MINIMUM_AGE = 13;
 
 const signupSchema = z.object({
   email: z.string().email(),
@@ -14,6 +37,8 @@ const signupSchema = z.object({
     .max(30)
     .regex(/^[a-zA-Z0-9_]+$/),
   password: z.string().min(8).max(128),
+  dateOfBirth: z.string().optional(),
+  termsAccepted: z.boolean().optional(),
 });
 
 const loginSchema = z.object({
@@ -49,6 +74,20 @@ function formatAuthUser(row: {
   };
 }
 
+function calculateAge(dob: string): number {
+  const birth = new Date(dob);
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const monthDiff = now.getMonth() - birth.getMonth();
+  if (
+    monthDiff < 0 ||
+    (monthDiff === 0 && now.getDate() < birth.getDate())
+  ) {
+    age--;
+  }
+  return age;
+}
+
 export const authRoutes = new Hono<AppEnv>();
 
 authRoutes.post("/signup", async (c) => {
@@ -61,35 +100,52 @@ authRoutes.post("/signup", async (c) => {
   const email = parsed.data.email.trim().toLowerCase();
   const handle = parsed.data.handle.trim().toLowerCase();
   const password = parsed.data.password;
+  const db = c.get("db");
 
-  const existing = await c.env.DB.prepare(
-    "SELECT id FROM users WHERE email = ?1 OR handle = ?2 LIMIT 1",
-  )
-    .bind(email, handle)
-    .first<{ id: string }>();
+  // Age gate (COPPA)
+  let dateOfBirth: string | null = null;
+  if (parsed.data.dateOfBirth) {
+    const age = calculateAge(parsed.data.dateOfBirth);
+    if (age < MINIMUM_AGE) {
+      return badRequest(c, `You must be at least ${MINIMUM_AGE} years old`);
+    }
+    dateOfBirth = parsed.data.dateOfBirth;
+  }
+
+  const existing = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(sql`lower(${users.email}) = lower(${email}) OR lower(${users.handle}) = lower(${handle})`)
+    .get();
 
   if (existing) {
     return c.json({ error: "Email or handle already exists" }, 409);
   }
 
   const userId = crypto.randomUUID();
-  const { hash, salt } = await hashPassword(password);
+  const { hash } = await hashPassword(password);
+  const now = new Date().toISOString();
 
-  await c.env.DB.prepare(
-    `INSERT INTO users (
-      id, email, handle, role, password_hash, password_salt, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, 'user', ?4, ?5, datetime('now'), datetime('now'))`,
-  )
-    .bind(userId, email, handle, hash, salt)
-    .run();
-
-  const user = {
+  await db.insert(users).values({
     id: userId,
     email,
     handle,
-    role: "user" as const,
-  };
+    passwordHash: hash,
+    passwordSalt: null,
+    dateOfBirth,
+    termsAcceptedAt: parsed.data.termsAccepted ? now : null,
+    privacyAcceptedAt: parsed.data.termsAccepted ? now : null,
+  });
+
+  const user = { id: userId, email, handle, role: "user" as const };
   const token = await issueAccessToken(user, c.env);
+
+  await writeAuditLog(db, {
+    actorUserId: userId,
+    action: "account_created",
+    targetType: "user",
+    targetId: userId,
+  });
 
   return c.json({ token, user });
 });
@@ -103,37 +159,42 @@ authRoutes.post("/login", async (c) => {
 
   const email = parsed.data.email.trim().toLowerCase();
   const password = parsed.data.password;
+  const db = c.get("db");
 
-  const userRow = await c.env.DB.prepare(
-    `SELECT id, email, handle, role, password_hash, password_salt, suspended_at
-     FROM users WHERE email = ?1 LIMIT 1`,
-  )
-    .bind(email)
-    .first<{
-      id: string;
-      email: string;
-      handle: string;
-      role: "user" | "admin";
-      password_hash: string;
-      password_salt: string;
-      suspended_at: string | null;
-    }>();
+  const userRow = await db
+    .select()
+    .from(users)
+    .where(sql`lower(${users.email}) = lower(${email})`)
+    .get();
 
-  if (!userRow) {
+  if (
+    !userRow ||
+    !userRow.passwordHash
+  ) {
     return unauthorized(c, "Invalid email or password");
   }
 
-  if (userRow.suspended_at) {
+  if (userRow.suspendedAt) {
     return c.json({ error: "Account is suspended" }, 403);
   }
 
-  const valid = await verifyPassword(
+  const { valid, needsRehash } = await verifyPassword(
     password,
-    userRow.password_salt,
-    userRow.password_hash,
+    userRow.passwordSalt,
+    userRow.passwordHash,
   );
+
   if (!valid) {
     return unauthorized(c, "Invalid email or password");
+  }
+
+  // Upgrade legacy SHA-256 to bcrypt on login
+  if (needsRehash) {
+    const { hash: newHash } = await rehashPassword(password);
+    await db
+      .update(users)
+      .set({ passwordHash: newHash, passwordSalt: null })
+      .where(eq(users.id, userRow.id));
   }
 
   const user = formatAuthUser(userRow);
@@ -145,46 +206,43 @@ authRoutes.post("/login", async (c) => {
 authRoutes.post("/guest", async (c) => {
   const body = (await c.req.json().catch(() => null)) ?? {};
   const parsed = guestSchema.safeParse(body);
+  const db = c.get("db");
 
-  const rawDeviceId = parsed.success && parsed.data.deviceId ? parsed.data.deviceId : crypto.randomUUID();
-  const safeId = rawDeviceId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || crypto.randomUUID().replace(/[^a-zA-Z0-9]/g, "");
+  const rawDeviceId =
+    parsed.success && parsed.data.deviceId
+      ? parsed.data.deviceId
+      : crypto.randomUUID();
+  const safeId =
+    rawDeviceId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase() ||
+    crypto.randomUUID().replace(/[^a-zA-Z0-9]/g, "");
 
   const handle = `guest_${safeId.slice(0, 10)}`;
   const email = `${handle}@guest.zerofans`;
 
-  let userRow = await c.env.DB.prepare(
-    `SELECT id, email, handle, role
-     FROM users
-     WHERE handle = ?1
-     LIMIT 1`,
-  )
-    .bind(handle)
-    .first<{
-      id: string;
-      email: string;
-      handle: string;
-      role: "user" | "admin";
-    }>();
+  let userRow = await db
+    .select()
+    .from(users)
+    .where(eq(users.handle, handle))
+    .get();
 
   if (!userRow) {
     const passwordSeed = crypto.randomUUID();
-    const { hash, salt } = await hashPassword(passwordSeed);
+    const { hash } = await hashPassword(passwordSeed);
     const userId = crypto.randomUUID();
 
-    await c.env.DB.prepare(
-      `INSERT INTO users (
-        id, email, handle, role, password_hash, password_salt, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, 'user', ?4, ?5, datetime('now'), datetime('now'))`,
-    )
-      .bind(userId, email, handle, hash, salt)
-      .run();
+    await db.insert(users).values({
+      id: userId,
+      email,
+      handle,
+      passwordHash: hash,
+    });
 
     userRow = {
       id: userId,
       email,
       handle,
-      role: "user",
-    };
+      role: "user" as const,
+    } as typeof users.$inferSelect;
   }
 
   const user = formatAuthUser(userRow);
@@ -198,20 +256,13 @@ authRoutes.get("/me", requireAuth, async (c) => {
   if (!authUser) {
     return unauthorized(c);
   }
+  const db = c.get("db");
 
-  const row = await c.env.DB.prepare(
-    "SELECT id, email, handle, role, avatar_url, socials_json, created_at FROM users WHERE id = ?1 LIMIT 1",
-  )
-    .bind(authUser.id)
-    .first<{
-      id: string;
-      email: string;
-      handle: string;
-      role: "user" | "admin";
-      avatar_url: string | null;
-      socials_json: string | null;
-      created_at: string;
-    }>();
+  const row = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, authUser.id))
+    .get();
 
   if (!row) {
     return unauthorized(c);
@@ -219,9 +270,11 @@ authRoutes.get("/me", requireAuth, async (c) => {
 
   let socials: Array<{ platform: string; url: string }> = [];
   try {
-    const parsed = JSON.parse(row.socials_json ?? "[]");
+    const parsed = JSON.parse(row.socialsJson ?? "[]");
     if (Array.isArray(parsed)) socials = parsed;
-  } catch { /* empty */ }
+  } catch {
+    /* empty */
+  }
 
   return c.json({
     user: {
@@ -229,9 +282,9 @@ authRoutes.get("/me", requireAuth, async (c) => {
       email: row.email,
       handle: row.handle,
       role: row.role,
-      avatar_url: row.avatar_url,
+      avatar_url: row.avatarUrl,
       socials,
-      created_at: row.created_at,
+      created_at: row.createdAt,
     },
   });
 });
@@ -248,29 +301,175 @@ authRoutes.patch("/me", requireAuth, async (c) => {
     return badRequest(c, "Invalid profile update payload");
   }
 
-  const updates: string[] = [];
-  const values: (string | null)[] = [];
+  const db = c.get("db");
+  const updates: Partial<typeof users.$inferInsert> = {};
 
   if (parsed.data.avatarUrl !== undefined) {
-    updates.push("avatar_url = ?");
-    values.push(parsed.data.avatarUrl);
+    updates.avatarUrl = parsed.data.avatarUrl;
   }
   if (parsed.data.socials !== undefined) {
-    updates.push("socials_json = ?");
-    values.push(JSON.stringify(parsed.data.socials));
+    updates.socialsJson = JSON.stringify(parsed.data.socials);
   }
 
-  if (updates.length === 0) {
+  if (Object.keys(updates).length === 0) {
     return badRequest(c, "No fields to update");
   }
 
-  updates.push("updated_at = datetime('now')");
+  await db.update(users).set(updates).where(eq(users.id, authUser.id));
 
-  await c.env.DB.prepare(
-    `UPDATE users SET ${updates.join(", ")} WHERE id = ?`,
-  )
-    .bind(...values, authUser.id)
-    .run();
+  await writeAuditLog(db, {
+    actorUserId: authUser.id,
+    action: "profile_updated",
+    targetType: "user",
+    targetId: authUser.id,
+  });
 
   return c.json({ success: true });
+});
+
+// ── Compliance: Data Export (CCPA Right to Know) ───────────────────────
+
+authRoutes.get("/me/export", requireAuth, async (c) => {
+  const authUser = c.get("authUser");
+  if (!authUser) return unauthorized(c);
+  const db = c.get("db");
+
+  const userRow = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, authUser.id))
+    .get();
+  if (!userRow) return unauthorized(c);
+
+  const userAgents = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.ownerUserId, authUser.id));
+
+  const agentIds = userAgents.map((a) => a.id);
+
+  const userPosts =
+    agentIds.length > 0
+      ? await db
+          .select()
+          .from(posts)
+          .where(inArray(posts.agentId, agentIds))
+      : [];
+
+  const userComments = await db
+    .select()
+    .from(comments)
+    .where(eq(comments.userId, authUser.id));
+
+  const userLikes = await db
+    .select()
+    .from(likes)
+    .where(eq(likes.userId, authUser.id));
+
+  const userFollows = await db
+    .select()
+    .from(follows)
+    .where(eq(follows.userId, authUser.id));
+
+  const userSubs = await db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.userId, authUser.id));
+
+  const userCommunityMemberships = await db
+    .select()
+    .from(communityMembers)
+    .where(eq(communityMembers.userId, authUser.id));
+
+  const userEquippedSkills =
+    agentIds.length > 0
+      ? await db
+          .select()
+          .from(agentSkills)
+          .where(inArray(agentSkills.agentId, agentIds))
+      : [];
+
+  await writeAuditLog(db, {
+    actorUserId: authUser.id,
+    action: "data_export",
+    targetType: "user",
+    targetId: authUser.id,
+  });
+
+  return c.json({
+    exported_at: new Date().toISOString(),
+    profile: {
+      id: userRow.id,
+      email: userRow.email,
+      handle: userRow.handle,
+      role: userRow.role,
+      avatar_url: userRow.avatarUrl,
+      created_at: userRow.createdAt,
+    },
+    agents: userAgents,
+    posts: userPosts,
+    comments: userComments,
+    likes: userLikes,
+    follows: userFollows,
+    subscriptions: userSubs,
+    community_memberships: userCommunityMemberships,
+    equipped_skills: userEquippedSkills,
+  });
+});
+
+// ── Compliance: Account Deletion (CCPA Right to Delete) ────────────────
+
+authRoutes.delete("/me/account", requireAuth, async (c) => {
+  const authUser = c.get("authUser");
+  if (!authUser) return unauthorized(c);
+  const db = c.get("db");
+
+  await db.transaction(async (tx) => {
+    const userAgents = await tx
+      .select({ id: agents.id })
+      .from(agents)
+      .where(eq(agents.ownerUserId, authUser.id));
+    const agentIds = userAgents.map((a) => a.id);
+
+    // Write audit log before user is deleted (FK dependency)
+    await writeAuditLog(tx, {
+      actorUserId: authUser.id,
+      action: "account_deleted",
+      targetType: "user",
+      targetId: authUser.id,
+    });
+
+    // Cascade delete agent-related data
+    if (agentIds.length > 0) {
+      await tx
+        .delete(skillExecutionLogs)
+        .where(inArray(skillExecutionLogs.agentId, agentIds));
+      await tx
+        .delete(agentSkills)
+        .where(inArray(agentSkills.agentId, agentIds));
+      await tx
+        .delete(agentRelationships)
+        .where(
+          sql`${agentRelationships.sourceAgentId} IN (${sql.join(agentIds.map((id) => sql`${id}`), sql`, `)}) OR ${agentRelationships.targetAgentId} IN (${sql.join(agentIds.map((id) => sql`${id}`), sql`, `)})`,
+        );
+      await tx.delete(posts).where(inArray(posts.agentId, agentIds));
+      await tx
+        .delete(agentCommunities)
+        .where(inArray(agentCommunities.agentId, agentIds));
+      await tx.delete(agents).where(inArray(agents.id, agentIds));
+    }
+
+    // Delete user-level data
+    await tx.delete(communityMessages).where(eq(communityMessages.userId, authUser.id));
+    await tx.delete(communityMembers).where(eq(communityMembers.userId, authUser.id));
+    await tx.delete(comments).where(eq(comments.userId, authUser.id));
+    await tx.delete(likes).where(eq(likes.userId, authUser.id));
+    await tx.delete(follows).where(eq(follows.userId, authUser.id));
+    await tx.delete(subscriptions).where(eq(subscriptions.userId, authUser.id));
+
+    // Finally, delete the user
+    await tx.delete(users).where(eq(users.id, authUser.id));
+  });
+
+  return c.json({ success: true, message: "Account and all data deleted" });
 });
