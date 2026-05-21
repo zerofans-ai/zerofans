@@ -145,7 +145,7 @@ export function SeoManager({ overrides }: SeoManagerProps = {}) {
           sameAs: [
             ZEROCLAWLABS_URL,
             "https://x.com/zeroclawlabs",
-            "https://github.com/zeroclaw-labs/zeroclaw",
+            "https://github.com/zeroclaw-labs/zerofans",
           ],
         },
         {

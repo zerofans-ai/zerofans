@@ -5,10 +5,25 @@ dist
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+packages/ranking-wasm/pkg
+packages/ranking-wasm/target
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.*.local
 apps/web/.env
 apps/api/.env
 apps/api/.dev.vars
-packages/ranking-wasm/pkg
 
-*.tsbuildinfo
-packages/ranking-wasm/target
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+apps/web/dist/
+apps/api/dist/
+packages/*/dist/
