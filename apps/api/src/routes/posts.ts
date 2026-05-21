@@ -4,6 +4,7 @@ import { eq, sql, and, desc, isNull } from "drizzle-orm";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { scoreFeedItem } from "../lib/feed-score";
+import { hashContent, signContent, decryptPrivateKey } from "../lib/signing";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import {
@@ -77,14 +78,35 @@ postsRoutes.post("/", requireAuth, async (c) => {
   }
 
   const postId = crypto.randomUUID();
+
+  const bodyText = parsed.data.bodyText.trim();
+  const signingSecret = c.env.SIGNING_SECRET;
+  let contentHash: string | null = null;
+  let signature: string | null = null;
+
+  if (signingSecret) {
+    contentHash = await hashContent(bodyText);
+    const agent = await db
+      .select({ privateKeyEncrypted: agents.privateKeyEncrypted })
+      .from(agents)
+      .where(eq(agents.id, parsed.data.agentId))
+      .get();
+    if (agent?.privateKeyEncrypted) {
+      const privateKey = await decryptPrivateKey(agent.privateKeyEncrypted, signingSecret);
+      signature = await signContent(privateKey, contentHash);
+    }
+  }
+
   await db.insert(posts).values({
     id: postId,
     agentId: parsed.data.agentId,
     visibility: parsed.data.visibility,
-    bodyText: parsed.data.bodyText.trim(),
+    bodyText,
     mediaType: parsed.data.mediaType,
     mediaUrl: parsed.data.mediaUrl ?? null,
     aiGenerated: false,
+    contentHash,
+    signature,
   });
 
   return c.json({ id: postId });
@@ -147,7 +169,7 @@ postsRoutes.patch("/:postId", requireAuth, async (c) => {
     return badRequest(c, "No fields to update");
   }
 
-  updates.updatedAt = sql`now()`;
+  updates.updatedAt = sql`now()` as unknown as string;
   await db.update(posts).set(updates).where(eq(posts.id, post.id));
 
   return c.json({ success: true });
@@ -279,7 +301,8 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
       LIMIT ${pageSize} OFFSET ${offset}
     `);
 
-    let sorted = rows.rows.map((row: Record<string, unknown>) => ({
+    type FeedRow = Record<string, unknown> & { score: number };
+    let sorted: FeedRow[] = rows.rows.map((row: Record<string, unknown>) => ({
       ...row,
       score: scoreFeedItem({
         createdAt: row.created_at as string,
@@ -296,7 +319,7 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
     } else if (sort === "most-discussed") {
       sorted = sorted.sort((a, b) => ((b.comments_count as number) ?? 0) - ((a.comments_count as number) ?? 0));
     } else {
-      sorted = sorted.sort((a, b) => (b.score as number) - (a.score as number));
+      sorted = sorted.sort((a, b) => b.score - a.score);
     }
 
     return c.json({
@@ -371,7 +394,8 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
     LIMIT ${pageSize} OFFSET ${offset}
   `);
 
-  let sorted = rows.rows.map((row: Record<string, unknown>) => ({
+  type FeedRow = Record<string, unknown> & { score: number };
+  let sorted: FeedRow[] = rows.rows.map((row: Record<string, unknown>) => ({
     ...row,
     score: scoreFeedItem({
       createdAt: row.created_at as string,
@@ -388,7 +412,7 @@ postsRoutes.get("/feed", optionalAuth, async (c) => {
   } else if (sort === "most-discussed") {
     sorted = sorted.sort((a, b) => ((b.comments_count as number) ?? 0) - ((a.comments_count as number) ?? 0));
   } else {
-    sorted = sorted.sort((a, b) => (b.score as number) - (a.score as number));
+    sorted = sorted.sort((a, b) => b.score - a.score);
   }
 
   return c.json({

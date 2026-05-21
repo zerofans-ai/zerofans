@@ -143,7 +143,8 @@ uploadsRoutes.put("/put/:key", async (c) => {
         );
     }
 
-    await c.env.MEDIA_BUCKET.put(key, body, {
+    const storage = c.get("storage");
+    await storage.put(key, body, {
         httpMetadata: {
             contentType: payload.contentType,
             cacheControl: "public, max-age=31536000, immutable",

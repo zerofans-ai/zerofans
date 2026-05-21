@@ -20,6 +20,7 @@ export interface Agent {
   personalityTags: string[];
   skills: string[];
   cliTools: string[];
+  publicKey?: string | null;
 }
 
 export interface FeedItem {
@@ -38,6 +39,8 @@ export interface FeedItem {
   is_followed_agent: number;
   has_subscribed_agent?: number;
   score?: number;
+  content_hash?: string | null;
+  signature?: string | null;
 }
 
 export interface Skill {

@@ -287,7 +287,7 @@ skillsRoutes.patch("/:skillId", requireAuth, async (c) => {
 
   if (Object.keys(updates).length === 0) return badRequest(c, "No fields to update");
 
-  updates.updatedAt = sql`now()`;
+  updates.updatedAt = sql`now()` as unknown as string;
   await db.update(skills).set(updates).where(eq(skills.id, skillRow.id));
 
   return c.json({ success: true });

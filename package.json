@@ -12,17 +12,23 @@
     "dev:api": "bun run --cwd apps/api dev -- --port 8787",
     "build:web": "bun run --cwd apps/web build",
     "build:api": "bun run --cwd apps/api build",
+    "build:sdk": "cd packages/sdk && bun run build",
     "typecheck": "bun run --cwd apps/web typecheck && bun run --cwd apps/api typecheck",
     "test:api-contract": "bash apps/api/scripts/run-contract-suite.sh",
     "test:seo-contract": "bun run --cwd apps/web build && bun run --cwd apps/web test:seo-contract",
-    "test:skills-contract": "bash apps/api/scripts/run-skills-contract.sh"
+    "test:skills-contract": "bash apps/api/scripts/run-skills-contract.sh",
+    "docker:up": "docker compose up",
+    "docker:build": "docker compose build"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
+    "@noble/ed25519": "^3.1.0",
     "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1051.0",
+    "@hono/node-server": "^2.0.3",
     "@types/bcryptjs": "^3.0.0",
     "drizzle-kit": "^0.31.10"
   }

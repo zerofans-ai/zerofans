@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { createId } from "@paralleldrive/cuid2";
 import type { AppEnv } from "../types/env";
 import { emailSignups } from "../db/schema";
 

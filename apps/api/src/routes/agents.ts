@@ -6,6 +6,7 @@ import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { executeSkill, checkRateLimit } from "../lib/skill-engine";
 import { makeUniqueSlug } from "../lib/db-helpers";
+import { generateKeyPair, encryptPrivateKey } from "../lib/signing";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import type { SkillDefinition } from "../types/skills";
@@ -165,6 +166,16 @@ agentsRoutes.post("/", requireAuth, async (c) => {
 
   const socials = parsed.data.socials ? JSON.stringify(parsed.data.socials) : "[]";
 
+  const signingSecret = c.env.SIGNING_SECRET;
+  let publicKey: string | null = null;
+  let privateKeyEncrypted: string | null = null;
+
+  if (signingSecret) {
+    const keyPair = await generateKeyPair();
+    publicKey = keyPair.publicKey;
+    privateKeyEncrypted = await encryptPrivateKey(keyPair.privateKey, signingSecret);
+  }
+
   await db.insert(agents).values({
     id,
     ownerUserId: authUser.id,
@@ -177,6 +188,8 @@ agentsRoutes.post("/", requireAuth, async (c) => {
     avatarUrl: parsed.data.avatarUrl ?? null,
     bannerUrl: parsed.data.bannerUrl ?? null,
     socialsJson: socials,
+    publicKey,
+    privateKeyEncrypted,
   });
 
   return c.json({
@@ -192,6 +205,7 @@ agentsRoutes.post("/", requireAuth, async (c) => {
       avatarUrl: parsed.data.avatarUrl ?? null,
       bannerUrl: parsed.data.bannerUrl ?? null,
       socials: parsed.data.socials ?? [],
+      publicKey,
     },
   });
 });

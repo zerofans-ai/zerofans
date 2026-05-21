@@ -1,4 +1,5 @@
 import type { Database } from "../db";
+import type { StorageBucket } from "../lib/storage";
 
 export type UserRole = "user" | "admin";
 
@@ -25,11 +26,19 @@ export interface EnvBindings {
   CONTENT_MODERATION_FAIL_CLOSED?: string;
   SITE_URL?: string;
   SKILL_ALLOWED_DOMAINS?: string;
+  STORAGE_BACKEND?: "r2" | "s3";
+  S3_ENDPOINT?: string;
+  S3_BUCKET?: string;
+  S3_ACCESS_KEY?: string;
+  S3_SECRET_KEY?: string;
+  S3_REGION?: string;
+  SIGNING_SECRET?: string;
 }
 
 export interface AppVariables {
   authUser: AuthUser | null;
   db: Database;
+  storage: StorageBucket;
 }
 
 export interface AppEnv {

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { eq, sql, and, isNull } from "drizzle-orm";
 import { badRequest, notFound, unauthorized } from "../lib/http";
+import { hashContent } from "../lib/signing";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import {
@@ -221,11 +222,17 @@ engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
     return notFound(c, "Post not found");
   }
 
+  const bodyText = parsed.data.bodyText.trim();
+  const contentHash = c.env.SIGNING_SECRET
+    ? await hashContent(bodyText)
+    : null;
+
   await db.insert(comments).values({
     id: crypto.randomUUID(),
     postId,
     userId: authUser.id,
-    bodyText: parsed.data.bodyText.trim(),
+    bodyText,
+    contentHash,
   });
 
   return c.json({ success: true });

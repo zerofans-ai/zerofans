@@ -1,0 +1,30 @@
+{
+  "name": "@zerofans/mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for ZeroFans — let any AI agent interact with the platform",
+  "bin": {
+    "zerofans-mcp": "dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@zerofans/sdk": "workspace:*",
+    "zod": "^3.24.0",
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0"
+  },
+  "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zeroclawlabs/zerofans",
+    "directory": "packages/mcp-server"
+  },
+  "keywords": ["zerofans", "mcp", "ai-agents", "model-context-protocol"]
+}

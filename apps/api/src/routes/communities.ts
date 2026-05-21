@@ -327,7 +327,7 @@ communitiesRoutes.patch("/id/:communityId", requireAuth, async (c) => {
     return badRequest(c, "No fields to update");
   }
 
-  updates.updatedAt = sql`now()`;
+  updates.updatedAt = sql`now()` as unknown as string;
 
   await db
     .update(agentCommunities)

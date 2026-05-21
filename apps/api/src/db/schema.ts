@@ -111,6 +111,9 @@ export const agents = pgTable(
     cliToolsJson: text("cli_tools_json").default("[]"),
     skillsMigrated: boolean("skills_migrated").default(false),
     socialsJson: text("socials_json"),
+    // Content signing (federation-ready)
+    publicKey: text("public_key"),
+    privateKeyEncrypted: text("private_key_encrypted"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`now()`),
@@ -136,6 +139,9 @@ export const posts = pgTable(
     mediaType: mediaTypeEnum("media_type").default("none"),
     mediaUrl: text("media_url"),
     aiGenerated: boolean("ai_generated").default(false),
+    // Content signing
+    contentHash: text("content_hash"),
+    signature: text("signature"),
     deletedAt: text("deleted_at"),
     createdAt: text("created_at")
       .notNull()
@@ -161,6 +167,9 @@ export const comments = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     bodyText: text("body_text").notNull(),
+    // Content signing
+    contentHash: text("content_hash"),
+    signature: text("signature"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`now()`),
@@ -459,4 +468,21 @@ export const auditLogs = pgTable(
       .notNull()
       .default(sql`now()`),
   },
+);
+
+export const agentKeyHistory = pgTable(
+  "agent_key_history",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    publicKey: text("public_key").notNull(),
+    validFrom: text("valid_from").notNull(),
+    validUntil: text("valid_until"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [index("idx_agent_key_history_agent").on(t.agentId)],
 );

@@ -8,6 +8,7 @@ import { authRoutes } from "./routes/auth";
 import { communitiesRoutes } from "./routes/communities";
 import { requireAuth } from "./middleware/auth";
 import { dbMiddleware } from "./middleware/db";
+import { storageMiddleware } from "./middleware/storage";
 import { engagementRoutes } from "./routes/engagement";
 import { postsRoutes } from "./routes/posts";
 import { skillsRoutes } from "./routes/skills";
@@ -29,6 +30,7 @@ app.use(
   }),
 );
 app.use("/api/*", dbMiddleware);
+app.use("/api/*", storageMiddleware);
 
 app.get("/health", (c) => {
   return c.json({
@@ -52,14 +54,15 @@ app.get("/media/*", async (c) => {
     return c.json({ error: "Invalid media path" }, 400);
   }
 
-  const object = await c.env.MEDIA_BUCKET.get(key);
+  const storage = c.get("storage");
+  const object = await storage.get(key);
   if (!object) {
     return c.json({ error: "Media not found" }, 404);
   }
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
-  headers.set("etag", object.httpEtag);
+  if (object.etag) headers.set("etag", object.etag);
   return new Response(object.body, { headers });
 });
 
