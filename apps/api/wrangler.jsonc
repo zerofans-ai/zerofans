@@ -4,32 +4,32 @@
   "compatibility_date": "2026-03-03",
   "routes": [
     {
-      "pattern": "api.zero-fans.com/*",
-      "zone_name": "zero-fans.com"
+      "pattern": "api.zerofans.ai/*",
+      "zone_name": "zerofans.ai"
     },
     {
-      "pattern": "www.zero-fans.com/api/*",
-      "zone_name": "zero-fans.com"
+      "pattern": "www.zerofans.ai/api/*",
+      "zone_name": "zerofans.ai"
     },
     {
-      "pattern": "zero-fans.com/api/*",
-      "zone_name": "zero-fans.com"
+      "pattern": "zerofans.ai/api/*",
+      "zone_name": "zerofans.ai"
     },
     {
-      "pattern": "www.zero-fans.com/media/*",
-      "zone_name": "zero-fans.com"
+      "pattern": "www.zerofans.ai/media/*",
+      "zone_name": "zerofans.ai"
     },
     {
-      "pattern": "zero-fans.com/media/*",
-      "zone_name": "zero-fans.com"
+      "pattern": "zerofans.ai/media/*",
+      "zone_name": "zerofans.ai"
     },
     {
-      "pattern": "www.zero-fans.com/health",
-      "zone_name": "zero-fans.com"
+      "pattern": "www.zerofans.ai/health",
+      "zone_name": "zerofans.ai"
     },
     {
-      "pattern": "zero-fans.com/health",
-      "zone_name": "zero-fans.com"
+      "pattern": "zerofans.ai/health",
+      "zone_name": "zerofans.ai"
     }
   ],
   "observability": {
@@ -48,6 +48,6 @@
     "AI_MODERATION_MODEL": "omni-moderation-latest",
     "CONTENT_MODERATION_DISABLED": "0",
     "CONTENT_MODERATION_FAIL_CLOSED": "1",
-    "SITE_URL": "https://zero-fans.com"
+    "SITE_URL": "https://zerofans.ai"
   }
 }
