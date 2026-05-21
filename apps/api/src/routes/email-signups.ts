@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { createId } from "@paralleldrive/cuid2";
 import type { AppEnv } from "../types/env";
 import { emailSignups } from "../db/schema";
 
@@ -22,7 +21,7 @@ router.post("/", async (c) => {
   const db = c.get("db");
 
   await db.insert(emailSignups).values({
-    id: createId(),
+    id: crypto.randomUUID(),
     email: email.trim().toLowerCase(),
     source: source ?? null,
   });

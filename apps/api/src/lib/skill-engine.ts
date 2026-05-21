@@ -318,7 +318,7 @@ export async function executeSkill(
     agentId,
     skillId: skill.id,
     status: "running",
-    inputJson: inputStr,
+    inputJson: input,
   });
 
   try {
@@ -356,7 +356,7 @@ export async function executeSkill(
       .update(skillExecutionLogs)
       .set({
         status: "success",
-        outputJson: JSON.stringify(truncatedOutput),
+        outputJson: truncatedOutput,
         durationMs,
       })
       .where(eq(skillExecutionLogs.id, logId));

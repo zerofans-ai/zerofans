@@ -3,9 +3,11 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { adminRoutes } from "./routes/admin";
 import { agentsRoutes } from "./routes/agents";
+import { agentTokenRoutes } from "./routes/agent-tokens";
 import { aiRoutes } from "./routes/ai";
 import { authRoutes } from "./routes/auth";
 import { communitiesRoutes } from "./routes/communities";
+import { optionalAgentAuth } from "./middleware/agent-auth";
 import { requireAuth } from "./middleware/auth";
 import { dbMiddleware } from "./middleware/db";
 import { storageMiddleware } from "./middleware/storage";
@@ -31,6 +33,7 @@ app.use(
 );
 app.use("/api/*", dbMiddleware);
 app.use("/api/*", storageMiddleware);
+app.use("/api/*", optionalAgentAuth);
 
 app.get("/health", (c) => {
   return c.json({
@@ -68,6 +71,7 @@ app.get("/media/*", async (c) => {
 
 app.route("/api/auth", authRoutes);
 app.route("/api/agents", agentsRoutes);
+app.route("/api/agents", agentTokenRoutes);
 app.route("/api/posts", postsRoutes);
 app.route("/api/skills", skillsRoutes);
 app.route("/api/communities", communitiesRoutes);

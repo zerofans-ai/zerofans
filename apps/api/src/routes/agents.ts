@@ -106,42 +106,51 @@ async function ensureOwnedAgent(
   return null;
 }
 
-function parseStringArray(serialized: string | null): string[] {
-  try {
-    const parsed = JSON.parse(serialized ?? "[]");
-    if (!Array.isArray(parsed)) {
-      return [];
+function ensureStringArray(val: unknown): string[] {
+  if (Array.isArray(val))
+    return val
+      .map((v) => String(v).trim())
+      .filter((v) => v.length > 0);
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed))
+        return parsed
+          .map((v) => String(v).trim())
+          .filter((v) => v.length > 0);
+    } catch {
+      /* empty */
     }
-    return parsed
-      .map((value) => String(value).trim())
-      .filter((value) => value.length > 0);
-  } catch {
-    return [];
   }
+  return [];
 }
 
-function parseSocials(serialized: string | null): Array<{ platform: string; url: string }> {
-  try {
-    const parsed = JSON.parse(serialized ?? "[]");
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item: unknown) =>
+function parseSocials(val: unknown): Array<{ platform: string; url: string }> {
+  if (Array.isArray(val))
+    return val.filter(
+      (item): item is { platform: string; url: string } =>
         typeof item === "object" && item !== null && "platform" in item && "url" in item,
     );
-  } catch {
-    return [];
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed))
+        return parsed.filter(
+          (item): item is { platform: string; url: string } =>
+            typeof item === "object" && item !== null && "platform" in item && "url" in item,
+        );
+    } catch {
+      /* empty */
+    }
   }
+  return [];
 }
 
-function serializeStringArray(values: string[] | undefined): string {
-  if (!values || values.length === 0) {
-    return "[]";
-  }
-
-  const uniqueValues = Array.from(
-    new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
+function serializeStringArray(values: string[] | undefined): string[] {
+  if (!values || values.length === 0) return [];
+  return Array.from(
+    new Set(values.map((v) => v.trim()).filter((v) => v.length > 0)),
   );
-  return JSON.stringify(uniqueValues);
 }
 
 export const agentsRoutes = new Hono<AppEnv>();
@@ -165,7 +174,7 @@ agentsRoutes.post("/", requireAuth, async (c) => {
   const skillsJson = serializeStringArray(parsed.data.skills);
   const cliTools = serializeStringArray(parsed.data.cliTools);
 
-  const socials = parsed.data.socials ? JSON.stringify(parsed.data.socials) : "[]";
+  const socials = parsed.data.socials ?? [];
 
   const signingSecret = c.env.SIGNING_SECRET;
   let publicKey: string | null = null;
@@ -200,9 +209,9 @@ agentsRoutes.post("/", requireAuth, async (c) => {
       name: parsed.data.name.trim(),
       slug,
       bio: parsed.data.bio ?? null,
-      personalityTags: parseStringArray(personalityTags),
-      skills: parseStringArray(skillsJson),
-      cliTools: parseStringArray(cliTools),
+      personalityTags: personalityTags,
+      skills: skillsJson,
+      cliTools: cliTools,
       avatarUrl: parsed.data.avatarUrl ?? null,
       bannerUrl: parsed.data.bannerUrl ?? null,
       socials: parsed.data.socials ?? [],
@@ -268,7 +277,7 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
     updates.cliToolsJson = serializeStringArray(parsed.data.cliTools);
   }
   if (parsed.data.socials !== undefined) {
-    updates.socialsJson = JSON.stringify(parsed.data.socials);
+    updates.socialsJson = parsed.data.socials;
   }
 
   if (Object.keys(updates).length === 0) {
@@ -336,10 +345,10 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
     bio: string | null;
     avatar_url: string | null;
     banner_url: string | null;
-    personality_tags_json: string | null;
-    skills_json: string | null;
-    cli_tools_json: string | null;
-    socials_json: string | null;
+    personality_tags_json: unknown;
+    skills_json: unknown;
+    cli_tools_json: unknown;
+    socials_json: unknown;
     followers_count: number;
     subscribers_count: number;
     agent_followers_count: number;
@@ -393,9 +402,9 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       avatarUrl: row.avatar_url,
       bannerUrl: row.banner_url,
       socials: parseSocials(row.socials_json),
-      personalityTags: parseStringArray(row.personality_tags_json),
-      skills: parseStringArray(row.skills_json),
-      cliTools: parseStringArray(row.cli_tools_json),
+      personalityTags: ensureStringArray(row.personality_tags_json),
+      skills: ensureStringArray(row.skills_json),
+      cliTools: ensureStringArray(row.cli_tools_json),
       followersCount: row.followers_count ?? 0,
       subscribersCount: row.subscribers_count ?? 0,
       agentFollowersCount: row.agent_followers_count ?? 0,
@@ -594,15 +603,13 @@ agentsRoutes.post("/:agentId/skills", requireAuth, async (c) => {
   );
   if (!skill) return notFound(c, "Skill not found");
 
-  const configOverridesJson = parsed.data.config_overrides
-    ? JSON.stringify(parsed.data.config_overrides)
-    : null;
+  const configOverrides = parsed.data.config_overrides ?? null;
 
   await db.execute(sql`
     INSERT INTO agent_skills (agent_id, skill_id, config_overrides_json, enabled, equipped_at)
-    VALUES (${ownedAgent.id}, ${parsed.data.skill_id}, ${configOverridesJson}, true, now())
+    VALUES (${ownedAgent.id}, ${parsed.data.skill_id}, ${configOverrides}, true, now())
     ON CONFLICT(agent_id, skill_id) DO UPDATE SET
-      config_overrides_json = ${configOverridesJson}, enabled = true, equipped_at = now()
+      config_overrides_json = ${configOverrides}, enabled = true, equipped_at = now()
   `);
 
   return c.json({ success: true });
@@ -653,7 +660,7 @@ agentsRoutes.get("/:agentId/skills", optionalAuth, async (c) => {
       category: r.category,
       action_type: r.action_type,
       visibility: r.visibility,
-      config_overrides: r.config_overrides_json ? JSON.parse(r.config_overrides_json) : null,
+      config_overrides: r.config_overrides_json ?? null,
       enabled: r.enabled,
       equipped_at: r.equipped_at,
     })),
@@ -691,7 +698,7 @@ agentsRoutes.patch("/:agentId/skills/:skillId", requireAuth, async (c) => {
   const updates: Partial<typeof agentSkills.$inferInsert> = {};
 
   if (parsed.data.config_overrides !== undefined) {
-    updates.configOverridesJson = JSON.stringify(parsed.data.config_overrides);
+    updates.configOverridesJson = parsed.data.config_overrides;
   }
   if (parsed.data.enabled !== undefined) {
     updates.enabled = parsed.data.enabled;
@@ -752,16 +759,25 @@ agentsRoutes.post("/:agentId/skills/:skillId/execute", requireAuth, async (c) =>
   const parsed = executeSkillSchema.safeParse(body ?? {});
   const input = parsed.success ? (parsed.data.input ?? {}) : {};
 
-  // Parse action_config if it's a string (from DB)
-  const skillWithParsedConfig = {
-    ...skill,
-    action_config:
-      typeof skill.actionConfig === "string"
-        ? JSON.parse(skill.actionConfig)
-        : skill.actionConfig,
+  // Map Drizzle row to SkillDefinition format
+  const skillDef: SkillDefinition = {
+    id: skill.id,
+    slug: skill.slug,
+    name: skill.name,
+    description: skill.description ?? "",
+    category: skill.category,
+    input_schema: skill.inputSchema ?? {},
+    output_schema: skill.outputSchema ?? {},
+    action_type: skill.actionType,
+    action_config: skill.actionConfig ?? {},
+    visibility: skill.visibility ?? "public",
+    creator_agent_id: skill.creatorAgentId ?? null,
+    enabled: skill.enabled ? 1 : 0,
+    created_at: skill.createdAt.toISOString(),
+    updated_at: skill.updatedAt.toISOString(),
   };
 
-  const result = await executeSkill(c.env, ownedAgent.id, skillWithParsedConfig, input as Record<string, unknown>);
+  const result = await executeSkill(c.env, ownedAgent.id, skillDef, input as Record<string, unknown>);
 
   return c.json({ result });
 });
@@ -1028,9 +1044,9 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
       avatarUrl: agent.avatar_url,
       bannerUrl: agent.banner_url,
       socials: parseSocials(agent.socials_json),
-      personalityTags: parseStringArray(agent.personality_tags_json),
-      skills: parseStringArray(agent.skills_json),
-      cliTools: parseStringArray(agent.cli_tools_json),
+      personalityTags: ensureStringArray(agent.personality_tags_json),
+      skills: ensureStringArray(agent.skills_json),
+      cliTools: ensureStringArray(agent.cli_tools_json),
       createdAt: agent.created_at,
       equippedSkills,
       isFollowed,

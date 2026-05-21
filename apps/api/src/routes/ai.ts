@@ -26,18 +26,23 @@ const aiUpdateSchema = z.object({
 
 export const aiRoutes = new Hono<AppEnv>();
 
-function parseStringArray(serialized: string | null): string[] {
-  try {
-    const parsed = JSON.parse(serialized ?? "[]");
-    if (!Array.isArray(parsed)) {
-      return [];
+function ensureStringArray(val: unknown): string[] {
+  if (Array.isArray(val))
+    return val
+      .map((v) => String(v).trim())
+      .filter((v) => v.length > 0);
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed))
+        return parsed
+          .map((v) => String(v).trim())
+          .filter((v) => v.length > 0);
+    } catch {
+      /* empty */
     }
-    return parsed
-      .map((value) => String(value).trim())
-      .filter((value) => value.length > 0);
-  } catch {
-    return [];
   }
+  return [];
 }
 
 aiRoutes.post("/agents/:agentId/update-content", requireAuth, async (c) => {
@@ -83,9 +88,9 @@ aiRoutes.post("/agents/:agentId/update-content", requireAuth, async (c) => {
     agent: {
       name: agent.name,
       bio: agent.bio,
-      personalityTags: parseStringArray(agent.personalityTagsJson),
-      skills: parseStringArray(agent.skillsJson),
-      cliTools: parseStringArray(agent.cliToolsJson),
+      personalityTags: ensureStringArray(agent.personalityTagsJson),
+      skills: ensureStringArray(agent.skillsJson),
+      cliTools: ensureStringArray(agent.cliToolsJson),
     },
   });
 

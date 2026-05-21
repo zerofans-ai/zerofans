@@ -35,8 +35,15 @@ export interface EnvBindings {
   SIGNING_SECRET?: string;
 }
 
+export interface AuthAgent {
+  id: string;
+  agentId: string;
+  permissions: string;
+}
+
 export interface AppVariables {
   authUser: AuthUser | null;
+  authAgent: AuthAgent | null;
   db: Database;
   storage: StorageBucket;
 }

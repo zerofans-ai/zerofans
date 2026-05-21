@@ -92,10 +92,10 @@ function formatSkill(row: Record<string, unknown>): Record<string, unknown> {
     name: row.name,
     description: row.description,
     category: row.category,
-    input_schema: safeParseJson(row.input_schema as string),
-    output_schema: safeParseJson(row.output_schema as string),
+    input_schema: safeParseJson(row.input_schema),
+    output_schema: safeParseJson(row.output_schema),
     action_type: row.action_type,
-    action_config: safeParseJson(row.action_config as string),
+    action_config: safeParseJson(row.action_config),
     visibility: row.visibility,
     creator_agent_id: row.creator_agent_id,
     enabled: row.enabled,
@@ -104,12 +104,16 @@ function formatSkill(row: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-function safeParseJson(str: string | null): unknown {
-  try {
-    return JSON.parse(str ?? "{}");
-  } catch {
-    return {};
+function safeParseJson(val: unknown): unknown {
+  if (val && typeof val === "object") return val;
+  if (typeof val === "string") {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return {};
+    }
   }
+  return {};
 }
 
 export const skillsRoutes = new Hono<AppEnv>();
@@ -147,10 +151,10 @@ skillsRoutes.post("/", requireAuth, async (c) => {
     name: parsed.data.name.trim(),
     description: parsed.data.description ?? "",
     category: parsed.data.category,
-    inputSchema: JSON.stringify(parsed.data.input_schema ?? {}),
-    outputSchema: JSON.stringify(parsed.data.output_schema ?? {}),
+    inputSchema: parsed.data.input_schema ?? {},
+    outputSchema: parsed.data.output_schema ?? {},
     actionType: parsed.data.action_type,
-    actionConfig: JSON.stringify(parsed.data.action_config ?? {}),
+    actionConfig: parsed.data.action_config ?? {},
     visibility: parsed.data.visibility ?? "public",
     creatorAgentId: parsed.data.creator_agent_id ?? null,
     enabled: true,
@@ -271,16 +275,16 @@ skillsRoutes.patch("/:skillId", requireAuth, async (c) => {
     updates.category = parsed.data.category;
   }
   if (parsed.data.input_schema !== undefined) {
-    updates.inputSchema = JSON.stringify(parsed.data.input_schema);
+    updates.inputSchema = parsed.data.input_schema;
   }
   if (parsed.data.output_schema !== undefined) {
-    updates.outputSchema = JSON.stringify(parsed.data.output_schema);
+    updates.outputSchema = parsed.data.output_schema;
   }
   if (parsed.data.action_type !== undefined) {
     updates.actionType = parsed.data.action_type;
   }
   if (parsed.data.action_config !== undefined) {
-    updates.actionConfig = JSON.stringify(parsed.data.action_config);
+    updates.actionConfig = parsed.data.action_config;
   }
   if (parsed.data.visibility !== undefined) {
     updates.visibility = parsed.data.visibility;
@@ -288,7 +292,7 @@ skillsRoutes.patch("/:skillId", requireAuth, async (c) => {
 
   if (Object.keys(updates).length === 0) return badRequest(c, "No fields to update");
 
-  updates.updatedAt = sql`now()` as unknown as string;
+  updates.updatedAt = sql`now()` as unknown as Date;
   await db.update(skills).set(updates).where(eq(skills.id, skillRow.id));
 
   return c.json({ success: true });

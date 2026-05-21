@@ -32,7 +32,7 @@ const coverImageUrlSchema = z
   });
 
 const createCommunitySchema = z.object({
-  agentId: z.string().uuid(),
+  agentId: z.string().uuid().optional(),
   name: z.string().min(2).max(80),
   path: z.string().min(3).max(80).optional(),
   description: z.string().max(600).optional(),
@@ -66,13 +66,17 @@ function toPathSlug(input: string): string {
     .replace(/^-|-$/g, "");
 }
 
-function parseRules(serialized: string | null): string[] {
-  try {
-    const parsed = JSON.parse(serialized ?? "[]");
-    return Array.isArray(parsed) ? parsed.map(String) : [];
-  } catch {
-    return [];
+function parseRules(val: unknown): string[] {
+  if (Array.isArray(val)) return val.map(String);
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      return [];
+    }
   }
+  return [];
 }
 
 function validateCommunityPathOrNull(pathValue: string | undefined): string | null {
@@ -167,34 +171,39 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
   }
 
   const db = c.get("db");
-  const ownedAgent = await ensureOwnedAgent(c, parsed.data.agentId);
-  if (!ownedAgent) {
-    const agentExists = await firstRow(db
-      .select({ id: agents.id })
-      .from(agents)
-      .where(eq(agents.id, parsed.data.agentId))
-    );
+  const agentId = parsed.data.agentId ?? null;
+  let ownedAgent: { id: string; ownerUserId: string; name: string; slug: string } | null = null;
 
-    if (!agentExists) {
-      return notFound(c, "Agent not found");
+  if (agentId) {
+    ownedAgent = await ensureOwnedAgent(c, agentId);
+    if (!ownedAgent) {
+      const agentExists = await firstRow(db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+      );
+
+      if (!agentExists) {
+        return notFound(c, "Agent not found");
+      }
+      return forbidden(c, "You can only create communities for your own agents");
     }
-    return forbidden(c, "You can only create communities for your own agents");
-  }
 
-  const existingForAgent = await firstRow(db
-    .select({ id: agentCommunities.id, path: agentCommunities.path })
-    .from(agentCommunities)
-    .where(eq(agentCommunities.agentId, ownedAgent.id))
-  );
-  if (existingForAgent) {
-    return c.json(
-      {
-        error: "Community already exists for this agent",
-        communityId: existingForAgent.id,
-        path: existingForAgent.path,
-      },
-      409,
+    const existingForAgent = await firstRow(db
+      .select({ id: agentCommunities.id, path: agentCommunities.path })
+      .from(agentCommunities)
+      .where(eq(agentCommunities.agentId, ownedAgent.id))
     );
+    if (existingForAgent) {
+      return c.json(
+        {
+          error: "Community already exists for this agent",
+          communityId: existingForAgent.id,
+          path: existingForAgent.path,
+        },
+        409,
+      );
+    }
   }
 
   const requestedPath = validateCommunityPathOrNull(parsed.data.path);
@@ -207,7 +216,10 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
 
   let path = requestedPath;
   if (!path) {
-    path = await makeUniquePath(`${parsed.data.name}-${ownedAgent.slug}`, db);
+    const baseName = ownedAgent
+      ? `${parsed.data.name}-${ownedAgent.slug}`
+      : parsed.data.name;
+    path = await makeUniquePath(baseName, db);
   } else {
     const duplicate = await firstRow(db
       .select({ id: agentCommunities.id })
@@ -223,11 +235,12 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
   const name = parsed.data.name.trim();
   const description = parsed.data.description?.trim() || null;
   const coverImageUrl = parsed.data.coverImageUrl ?? null;
-  const rules = JSON.stringify(parsed.data.rules ?? []);
+  const rules = parsed.data.rules ?? [];
 
   await db.insert(agentCommunities).values({
     id,
-    agentId: ownedAgent.id,
+    agentId: ownedAgent?.id ?? null,
+    creatorUserId: authUser.id,
     name,
     path,
     description,
@@ -238,12 +251,13 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
   return c.json({
     community: {
       id,
-      agentId: ownedAgent.id,
+      agentId: ownedAgent?.id ?? null,
+      creatorUserId: authUser.id,
       name,
       path,
       description,
       coverImageUrl,
-      rules: JSON.parse(rules),
+      rules,
     },
   });
 });
@@ -267,10 +281,11 @@ communitiesRoutes.patch("/id/:communityId", requireAuth, async (c) => {
     .select({
       id: agentCommunities.id,
       agentId: agentCommunities.agentId,
+      creatorUserId: agentCommunities.creatorUserId,
       ownerUserId: agents.ownerUserId,
     })
     .from(agentCommunities)
-    .innerJoin(agents, eq(agents.id, agentCommunities.agentId))
+    .leftJoin(agents, eq(agents.id, agentCommunities.agentId))
     .where(eq(agentCommunities.id, communityId))
   );
 
@@ -278,7 +293,10 @@ communitiesRoutes.patch("/id/:communityId", requireAuth, async (c) => {
     return notFound(c, "Community not found");
   }
 
-  const canEdit = authUser.role === "admin" || authUser.id === existing.ownerUserId;
+  const canEdit =
+    authUser.role === "admin" ||
+    authUser.id === existing.ownerUserId ||
+    authUser.id === existing.creatorUserId;
   if (!canEdit) {
     return forbidden(c);
   }
@@ -321,14 +339,14 @@ communitiesRoutes.patch("/id/:communityId", requireAuth, async (c) => {
   }
 
   if (parsed.data.rules !== undefined) {
-    updates.rulesJson = JSON.stringify(parsed.data.rules);
+    updates.rulesJson = parsed.data.rules;
   }
 
   if (Object.keys(updates).length === 0) {
     return badRequest(c, "No fields to update");
   }
 
-  updates.updatedAt = sql`now()` as unknown as string;
+  updates.updatedAt = sql`now()` as unknown as Date;
 
   await db
     .update(agentCommunities)
@@ -388,8 +406,10 @@ communitiesRoutes.get("/mine", requireAuth, async (c) => {
       a.name AS agent_name,
       a.slug AS agent_slug
     FROM agent_communities c
-    JOIN agents a ON a.id = c.agent_id
-    WHERE (${authUser.role} = 'admin' OR a.owner_user_id = ${authUser.id})
+    LEFT JOIN agents a ON a.id = c.agent_id
+    WHERE (${authUser.role} = 'admin'
+      OR a.owner_user_id = ${authUser.id}
+      OR c.creator_user_id = ${authUser.id})
     ORDER BY c.created_at DESC
     LIMIT 100
   `);
@@ -402,7 +422,7 @@ communitiesRoutes.get("/mine", requireAuth, async (c) => {
       path: row.path,
       description: row.description,
       coverImageUrl: row.cover_image_url,
-      rules: parseRules(row.rules_json as string | null),
+      rules: parseRules(row.rules_json),
       createdAt: row.created_at,
       agent: {
         name: row.agent_name,
@@ -465,7 +485,7 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
         (SELECT COUNT(*) FROM community_members cm
          WHERE cm.community_id = c.id) AS members_count
       FROM agent_communities c
-      JOIN agents a ON a.id = c.agent_id
+      LEFT JOIN agents a ON a.id = c.agent_id
       WHERE (${query} = '%%'
         OR lower(c.name) LIKE ${query}
         OR lower(c.path) LIKE ${query}
@@ -484,7 +504,7 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
       path: row.path,
       description: row.description,
       coverImageUrl: row.cover_image_url,
-      rules: parseRules(row.rules_json as string | null),
+      rules: parseRules(row.rules_json),
       createdAt: row.created_at,
       postsCount: (row.posts_count as number) ?? 0,
       membersCount: (row.members_count as number) ?? 0,
@@ -493,9 +513,9 @@ communitiesRoutes.get("/discover", optionalAuth, async (c) => {
         name: row.agent_name,
         slug: row.agent_slug,
         avatarUrl: row.agent_avatar_url,
-        personalityTags: parseRules(row.agent_personality_tags_json as string | null),
-        skills: parseRules(row.agent_skills_json as string | null),
-        cliTools: parseRules(row.agent_cli_tools_json as string | null),
+        personalityTags: parseRules(row.agent_personality_tags_json),
+        skills: parseRules(row.agent_skills_json),
+        cliTools: parseRules(row.agent_cli_tools_json),
       },
     })),
   });
@@ -819,7 +839,7 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
       a.skills_json AS agent_skills_json,
       a.cli_tools_json AS agent_cli_tools_json
     FROM agent_communities c
-    JOIN agents a ON a.id = c.agent_id
+    LEFT JOIN agents a ON a.id = c.agent_id
     WHERE c.path = ${path}
     LIMIT 1
   `);
@@ -913,7 +933,7 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
       path: row.path,
       description: row.description,
       coverImageUrl: row.cover_image_url,
-      rules: parseRules(row.rules_json as string | null),
+      rules: parseRules(row.rules_json),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       membersCount,
@@ -924,9 +944,9 @@ communitiesRoutes.get("/:path", optionalAuth, async (c) => {
         name: row.agent_name,
         slug: row.agent_slug,
         avatarUrl: row.agent_avatar_url,
-        personalityTags: parseRules(row.agent_personality_tags_json as string | null),
-        skills: parseRules(row.agent_skills_json as string | null),
-        cliTools: parseRules(row.agent_cli_tools_json as string | null),
+        personalityTags: parseRules(row.agent_personality_tags_json),
+        skills: parseRules(row.agent_skills_json),
+        cliTools: parseRules(row.agent_cli_tools_json),
       },
     },
     posts: postsRows.rows,

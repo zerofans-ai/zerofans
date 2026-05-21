@@ -10,13 +10,15 @@ interface AuditParams {
   metadata?: Record<string, unknown>;
 }
 
-export async function writeAuditLog(db: Database, params: AuditParams) {
+type Insertable = { insert: Database["insert"] };
+
+export async function writeAuditLog(db: Insertable, params: AuditParams) {
   await db.insert(auditLogs).values({
     id: crypto.randomUUID(),
     actorUserId: params.actorUserId,
     action: params.action,
     targetType: params.targetType,
     targetId: params.targetId,
-    metadataJson: params.metadata ? JSON.stringify(params.metadata) : null,
+    metadataJson: params.metadata ?? null,
   });
 }

@@ -4,13 +4,20 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
   text,
+  timestamp,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+
+// ── Types ──────────────────────────────────────────────────────────────
+
+type SocialLink = { platform: string; url: string };
 
 // ── Enums ──────────────────────────────────────────────────────────────
 
@@ -71,23 +78,23 @@ export const relationshipTypeEnum = pgEnum("relationship_type", [
 export const users = pgTable(
   "users",
   {
-    id: text("id").primaryKey(),
+    id: uuid("id").primaryKey().defaultRandom(),
     email: text("email").notNull().unique(),
     handle: text("handle").notNull().unique(),
     avatarUrl: text("avatar_url"),
     role: userRoleEnum("role").default("user").notNull(),
     passwordHash: text("password_hash").notNull(),
     passwordSalt: text("password_salt"),
-    suspendedAt: text("suspended_at"),
-    socialsJson: text("socials_json"),
+    suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+    socialsJson: jsonb("socials_json").$type<SocialLink[]>(),
     // Compliance columns
     dateOfBirth: text("date_of_birth"),
-    termsAcceptedAt: text("terms_accepted_at"),
-    privacyAcceptedAt: text("privacy_accepted_at"),
-    createdAt: text("created_at")
+    termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
+    privacyAcceptedAt: timestamp("privacy_accepted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
-    updatedAt: text("updated_at")
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -97,27 +104,27 @@ export const users = pgTable(
 export const agents = pgTable(
   "agents",
   {
-    id: text("id").primaryKey(),
-    ownerUserId: text("owner_user_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerUserId: uuid("owner_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     slug: text("slug").notNull().unique(),
     bio: text("bio"),
-    personalityTagsJson: text("personality_tags_json"),
+    personalityTagsJson: jsonb("personality_tags_json").$type<string[]>(),
     avatarUrl: text("avatar_url"),
     bannerUrl: text("banner_url"),
-    skillsJson: text("skills_json").default("[]"),
-    cliToolsJson: text("cli_tools_json").default("[]"),
+    skillsJson: jsonb("skills_json").$type<string[]>().default([]),
+    cliToolsJson: jsonb("cli_tools_json").$type<string[]>().default([]),
     skillsMigrated: boolean("skills_migrated").default(false),
-    socialsJson: text("socials_json"),
+    socialsJson: jsonb("socials_json").$type<SocialLink[]>(),
     // Content signing (federation-ready)
     publicKey: text("public_key"),
     privateKeyEncrypted: text("private_key_encrypted"),
-    createdAt: text("created_at")
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
-    updatedAt: text("updated_at")
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -130,8 +137,8 @@ export const agents = pgTable(
 export const posts = pgTable(
   "posts",
   {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    agentId: uuid("agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
     visibility: postVisibilityEnum("visibility").notNull(),
@@ -142,11 +149,11 @@ export const posts = pgTable(
     // Content signing
     contentHash: text("content_hash"),
     signature: text("signature"),
-    deletedAt: text("deleted_at"),
-    createdAt: text("created_at")
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
-    updatedAt: text("updated_at")
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -159,52 +166,61 @@ export const posts = pgTable(
 export const comments = pgTable(
   "comments",
   {
-    id: text("id").primaryKey(),
-    postId: text("post_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    postId: uuid("post_id")
       .notNull()
       .references(() => posts.id, { onDelete: "cascade" }),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id").references(() => agents.id, {
+      onDelete: "cascade",
+    }),
     bodyText: text("body_text").notNull(),
     // Content signing
     contentHash: text("content_hash"),
     signature: text("signature"),
-    createdAt: text("created_at")
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
-  (t) => [index("idx_comments_post_created_at").on(t.postId, t.createdAt)],
+  (t) => [
+    index("idx_comments_post_created_at").on(t.postId, t.createdAt),
+    check("comments_author_check", sql`(user_id IS NOT NULL) OR (agent_id IS NOT NULL)`),
+  ],
 );
 
 export const likes = pgTable(
   "likes",
   {
-    id: text("id").primaryKey(),
-    postId: text("post_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    postId: uuid("post_id")
       .notNull()
       .references(() => posts.id, { onDelete: "cascade" }),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    createdAt: text("created_at")
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id").references(() => agents.id, {
+      onDelete: "cascade",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
-  (t) => [uniqueIndex("idx_likes_user_post").on(t.userId, t.postId)],
+  (t) => [
+    uniqueIndex("idx_likes_user_post").on(t.userId, t.postId),
+    uniqueIndex("idx_likes_agent_post").on(t.agentId, t.postId),
+    check("likes_author_check", sql`(user_id IS NOT NULL) OR (agent_id IS NOT NULL)`),
+  ],
 );
 
 export const follows = pgTable(
   "follows",
   {
-    id: text("id").primaryKey(),
-    userId: text("user_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    agentId: text("agent_id")
+    agentId: uuid("agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
-    createdAt: text("created_at")
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -217,20 +233,20 @@ export const follows = pgTable(
 export const subscriptions = pgTable(
   "subscriptions",
   {
-    id: text("id").primaryKey(),
-    userId: text("user_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    agentId: text("agent_id")
+    agentId: uuid("agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
     status: subscriptionStatusEnum("status").notNull(),
     planType: text("plan_type").notNull(),
-    currentPeriodEnd: text("current_period_end"),
-    createdAt: text("created_at")
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
-    updatedAt: text("updated_at")
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -243,19 +259,19 @@ export const subscriptions = pgTable(
 export const agentRelationships = pgTable(
   "agent_relationships",
   {
-    id: text("id").primaryKey(),
-    sourceAgentId: text("source_agent_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceAgentId: uuid("source_agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
-    targetAgentId: text("target_agent_id")
+    targetAgentId: uuid("target_agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
     relationshipType: relationshipTypeEnum("relationship_type").notNull(),
     status: followStatusEnum("status").default("active"),
-    createdAt: text("created_at")
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
-    updatedAt: text("updated_at")
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -275,10 +291,10 @@ export const agentRelationships = pgTable(
 );
 
 export const emailSignups = pgTable("email_signups", {
-  id: text("id").primaryKey(),
+  id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull(),
   source: text("source"),
-  createdAt: text("created_at")
+  createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .default(sql`now()`),
 });
@@ -286,39 +302,44 @@ export const emailSignups = pgTable("email_signups", {
 export const agentCommunities = pgTable(
   "agent_communities",
   {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
-      .notNull()
-      .unique()
-      .references(() => agents.id, { onDelete: "cascade" }),
+    id: uuid("id").primaryKey().defaultRandom(),
+    agentId: uuid("agent_id").references(() => agents.id, {
+      onDelete: "cascade",
+    }),
+    creatorUserId: uuid("creator_user_id").references(() => users.id, {
+      onDelete: "cascade",
+    }),
     name: text("name").notNull(),
     path: text("path").notNull().unique(),
     description: text("description"),
     coverImageUrl: text("cover_image_url"),
-    rulesJson: text("rules_json").default("[]"),
-    createdAt: text("created_at")
+    rulesJson: jsonb("rules_json").$type<string[]>().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
-    updatedAt: text("updated_at")
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
-  (t) => [index("idx_agent_communities_created_at").on(t.createdAt)],
+  (t) => [
+    index("idx_agent_communities_created_at").on(t.createdAt),
+    check("community_creator_check", sql`(agent_id IS NOT NULL) OR (creator_user_id IS NOT NULL)`),
+  ],
 );
 
 export const communityMembers = pgTable(
   "community_members",
   {
-    id: text("id").primaryKey(),
-    communityId: text("community_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    communityId: uuid("community_id")
       .notNull()
       .references(() => agentCommunities.id, { onDelete: "cascade" }),
-    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
-    agentId: text("agent_id").references(() => agents.id, {
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id").references(() => agents.id, {
       onDelete: "cascade",
     }),
     role: text("role").default("member"),
-    joinedAt: text("joined_at")
+    joinedAt: timestamp("joined_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -330,21 +351,21 @@ export const communityMembers = pgTable(
 export const communityMessages = pgTable(
   "community_messages",
   {
-    id: text("id").primaryKey(),
-    communityId: text("community_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    communityId: uuid("community_id")
       .notNull()
       .references(() => agentCommunities.id, { onDelete: "cascade" }),
-    userId: text("user_id").references(() => users.id, {
+    userId: uuid("user_id").references(() => users.id, {
       onDelete: "set null",
     }),
-    agentId: text("agent_id").references(() => agents.id, {
+    agentId: uuid("agent_id").references(() => agents.id, {
       onDelete: "set null",
     }),
     body: text("body").notNull(),
-    createdAt: text("created_at")
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
-    deletedAt: text("deleted_at"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (t) => [
     index("idx_community_messages_community").on(t.communityId, t.createdAt),
@@ -360,15 +381,15 @@ export const mediaModeration = pgTable(
     mediaType: mediaTypeEnum("media_type").notNull(),
     status: moderationStatusEnum("status").notNull(),
     reason: text("reason"),
-    blockedCategoriesJson: text("blocked_categories_json"),
-    reviewedByUserId: text("reviewed_by_user_id").references(() => users.id, {
+    blockedCategoriesJson: jsonb("blocked_categories_json").$type<string[]>(),
+    reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
-    reviewedAt: text("reviewed_at"),
-    createdAt: text("created_at")
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
-    updatedAt: text("updated_at")
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -380,24 +401,24 @@ export const mediaModeration = pgTable(
 export const skills = pgTable(
   "skills",
   {
-    id: text("id").primaryKey(),
+    id: uuid("id").primaryKey().defaultRandom(),
     slug: text("slug").notNull().unique(),
     name: text("name").notNull(),
     description: text("description").default(""),
     category: skillCategoryEnum("category").notNull(),
-    inputSchema: text("input_schema").default("{}"),
-    outputSchema: text("output_schema").default("{}"),
+    inputSchema: jsonb("input_schema").$type<Record<string, unknown>>().default({}),
+    outputSchema: jsonb("output_schema").$type<Record<string, unknown>>().default({}),
     actionType: skillActionTypeEnum("action_type").notNull(),
-    actionConfig: text("action_config").default("{}"),
+    actionConfig: jsonb("action_config").$type<Record<string, unknown>>().default({}),
     visibility: skillVisibilityEnum("visibility").default("public"),
-    creatorAgentId: text("creator_agent_id").references(() => agents.id, {
+    creatorAgentId: uuid("creator_agent_id").references(() => agents.id, {
       onDelete: "set null",
     }),
     enabled: boolean("enabled").default(true),
-    createdAt: text("created_at")
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
-    updatedAt: text("updated_at")
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -410,15 +431,15 @@ export const skills = pgTable(
 export const agentSkills = pgTable(
   "agent_skills",
   {
-    agentId: text("agent_id")
+    agentId: uuid("agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
-    skillId: text("skill_id")
+    skillId: uuid("skill_id")
       .notNull()
       .references(() => skills.id, { onDelete: "cascade" }),
-    configOverridesJson: text("config_overrides_json"),
+    configOverridesJson: jsonb("config_overrides_json").$type<Record<string, unknown>>(),
     enabled: boolean("enabled").default(true),
-    equippedAt: text("equipped_at")
+    equippedAt: timestamp("equipped_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -431,19 +452,19 @@ export const agentSkills = pgTable(
 export const skillExecutionLogs = pgTable(
   "skill_execution_logs",
   {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    agentId: uuid("agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
-    skillId: text("skill_id")
+    skillId: uuid("skill_id")
       .notNull()
       .references(() => skills.id, { onDelete: "cascade" }),
     status: executionStatusEnum("status").default("pending"),
-    inputJson: text("input_json"),
-    outputJson: text("output_json"),
+    inputJson: jsonb("input_json").$type<Record<string, unknown>>(),
+    outputJson: jsonb("output_json").$type<Record<string, unknown>>(),
     durationMs: integer("duration_ms").default(0),
     errorMessage: text("error_message"),
-    createdAt: text("created_at")
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -456,15 +477,15 @@ export const skillExecutionLogs = pgTable(
 export const auditLogs = pgTable(
   "audit_logs",
   {
-    id: text("id").primaryKey(),
-    actorUserId: text("actor_user_id").references(() => users.id, {
+    id: uuid("id").primaryKey().defaultRandom(),
+    actorUserId: uuid("actor_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
     action: text("action").notNull(),
     targetType: text("target_type").notNull(),
     targetId: text("target_id").notNull(),
-    metadataJson: text("metadata_json"),
-    createdAt: text("created_at")
+    metadataJson: jsonb("metadata_json").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
@@ -473,16 +494,38 @@ export const auditLogs = pgTable(
 export const agentKeyHistory = pgTable(
   "agent_key_history",
   {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    agentId: uuid("agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
     publicKey: text("public_key").notNull(),
-    validFrom: text("valid_from").notNull(),
-    validUntil: text("valid_until"),
-    createdAt: text("created_at")
+    validFrom: timestamp("valid_from", { withTimezone: true }).notNull(),
+    validUntil: timestamp("valid_until", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
   (t) => [index("idx_agent_key_history_agent").on(t.agentId)],
+);
+
+export const agentTokens = pgTable(
+  "agent_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    name: text("name").notNull(),
+    permissions: jsonb("permissions").$type<string[]>().default([]),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    index("idx_agent_tokens_agent").on(t.agentId),
+    index("idx_agent_tokens_hash").on(t.tokenHash),
+  ],
 );

@@ -133,33 +133,37 @@ statsRoutes.get("/trending", async (c) => {
 
   for (const row of rows.rows) {
     const data = row as Record<string, unknown>;
-    const createdAt = new Date(data.created_at as string).getTime();
+    const createdAt = new Date(data.created_at as string | Date).getTime();
     const recencyBonus = now - createdAt < SEVEN_DAYS ? 2 : 1;
     const activityWeight =
       (1 + (data.followers as number) + (data.subscribers as number) * 2 + (data.posts as number)) * recencyBonus;
 
-    const parseTags = (json: string | null): string[] => {
-      if (!json) return [];
-      try {
-        const arr = JSON.parse(json);
-        return Array.isArray(arr) ? arr.filter((s: unknown) => typeof s === "string" && s.trim()) : [];
-      } catch {
-        return [];
+    const parseTags = (val: unknown): string[] => {
+      if (Array.isArray(val))
+        return val.filter((s: unknown) => typeof s === "string" && s.trim());
+      if (typeof val === "string") {
+        try {
+          const arr = JSON.parse(val);
+          return Array.isArray(arr) ? arr.filter((s: unknown) => typeof s === "string" && s.trim()) : [];
+        } catch {
+          return [];
+        }
       }
+      return [];
     };
 
     if (filterType === "all" || filterType === "tags") {
-      for (const tag of parseTags(data.personality_tags_json as string | null)) {
+      for (const tag of parseTags(data.personality_tags_json)) {
         addTag(tag, "tag", activityWeight);
       }
     }
     if (filterType === "all" || filterType === "skills") {
-      for (const skill of parseTags(data.skills_json as string | null)) {
+      for (const skill of parseTags(data.skills_json)) {
         addTag(skill, "skill", activityWeight);
       }
     }
     if (filterType === "all" || filterType === "tools") {
-      for (const tool of parseTags(data.cli_tools_json as string | null)) {
+      for (const tool of parseTags(data.cli_tools_json)) {
         addTag(tool, "tool", activityWeight);
       }
     }

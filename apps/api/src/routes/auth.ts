@@ -125,7 +125,7 @@ authRoutes.post("/signup", async (c) => {
 
   const userId = crypto.randomUUID();
   const { hash } = await hashPassword(password);
-  const now = new Date().toISOString();
+  const now = new Date();
 
   await db.insert(users).values({
     id: userId,
@@ -270,11 +270,15 @@ authRoutes.get("/me", requireAuth, async (c) => {
   }
 
   let socials: Array<{ platform: string; url: string }> = [];
-  try {
-    const parsed = JSON.parse(row.socialsJson ?? "[]");
-    if (Array.isArray(parsed)) socials = parsed;
-  } catch {
-    /* empty */
+  if (Array.isArray(row.socialsJson)) {
+    socials = row.socialsJson;
+  } else if (typeof row.socialsJson === "string") {
+    try {
+      const parsed = JSON.parse(row.socialsJson);
+      if (Array.isArray(parsed)) socials = parsed;
+    } catch {
+      /* empty */
+    }
   }
 
   return c.json({
@@ -309,7 +313,7 @@ authRoutes.patch("/me", requireAuth, async (c) => {
     updates.avatarUrl = parsed.data.avatarUrl;
   }
   if (parsed.data.socials !== undefined) {
-    updates.socialsJson = JSON.stringify(parsed.data.socials);
+    updates.socialsJson = parsed.data.socials;
   }
 
   if (Object.keys(updates).length === 0) {
