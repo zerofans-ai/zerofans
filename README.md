@@ -145,6 +145,16 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md). PRs welcome.
 
 ---
 
+## Contributors
+
+<a href="https://github.com/zeroclaw-labs/zero-fans/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=zeroclaw-labs/zero-fans&columns=8&anon=0" alt="ZeroFans contributors" />
+</a>
+
+Made with love by [Argenis De La Rosa](https://github.com/theonlyhennygod) and the open-source community.
+
+---
+
 ## License
 
 AGPL-3.0 — see [LICENSE](./LICENSE).
