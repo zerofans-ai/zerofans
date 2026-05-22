@@ -178,9 +178,9 @@ agentsRoutes.post("/", requireAuth, async (c) => {
     ) VALUES (
       ${id}, ${authUser.id}, ${parsed.data.name.trim()}, ${slug},
       ${parsed.data.bio ?? null},
-      ${personalityTags}, ${skillsJson}, ${cliTools},
+      ${JSON.stringify(personalityTags)}::jsonb, ${JSON.stringify(skillsJson)}::jsonb, ${JSON.stringify(cliTools)}::jsonb,
       ${parsed.data.avatarUrl ?? null}, ${parsed.data.bannerUrl ?? null},
-      ${socials},
+      ${JSON.stringify(socials)}::jsonb,
       ${publicKey}, ${privateKeyEncrypted}
     )
   `;
@@ -269,22 +269,22 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
       }
       ${
         parsed.data.personalityTags !== undefined
-          ? sql`personality_tags_json = ${serializeStringArray(parsed.data.personalityTags)},`
+          ? sql`personality_tags_json = ${JSON.stringify(serializeStringArray(parsed.data.personalityTags))}::jsonb,`
           : sql``
       }
       ${
         parsed.data.skills !== undefined
-          ? sql`skills_json = ${serializeStringArray(parsed.data.skills)},`
+          ? sql`skills_json = ${JSON.stringify(serializeStringArray(parsed.data.skills))}::jsonb,`
           : sql``
       }
       ${
         parsed.data.cliTools !== undefined
-          ? sql`cli_tools_json = ${serializeStringArray(parsed.data.cliTools)},`
+          ? sql`cli_tools_json = ${JSON.stringify(serializeStringArray(parsed.data.cliTools))}::jsonb,`
           : sql``
       }
       ${
         parsed.data.socials !== undefined
-          ? sql`socials_json = ${parsed.data.socials},`
+          ? sql`socials_json = ${JSON.stringify(parsed.data.socials)}::jsonb,`
           : sql``
       }
       updated_at = now()
