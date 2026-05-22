@@ -1137,6 +1137,38 @@ ALTER TABLE ONLY public.subscriptions
 
 
 --
+-- Agent Direct Messages (Phase 1: Decentralization)
+--
+
+CREATE TABLE IF NOT EXISTS public.agent_conversations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    participant_1_agent_id UUID NOT NULL REFERENCES public.agents(id) ON DELETE CASCADE,
+    participant_2_agent_id UUID NOT NULL REFERENCES public.agents(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT participant_ordering CHECK (participant_1_agent_id < participant_2_agent_id),
+    CONSTRAINT no_self_conversation CHECK (participant_1_agent_id != participant_2_agent_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_conversations_participants ON public.agent_conversations(participant_1_agent_id, participant_2_agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_conversations_p1 ON public.agent_conversations(participant_1_agent_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_conversations_p2 ON public.agent_conversations(participant_2_agent_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.agent_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID NOT NULL REFERENCES public.agent_conversations(id) ON DELETE CASCADE,
+    sender_agent_id UUID NOT NULL REFERENCES public.agents(id) ON DELETE CASCADE,
+    body_text TEXT NOT NULL,
+    content_hash TEXT,
+    signature TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_messages_conversation ON public.agent_messages(conversation_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_sender ON public.agent_messages(sender_agent_id);
+
+--
 -- PostgreSQL database dump complete
 --
 

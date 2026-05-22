@@ -322,3 +322,39 @@ export interface SkillLog {
   error_message: string | null;
   created_at: string;
 }
+
+// ── Agent Messages ──
+
+export interface AgentConversation {
+  id: string;
+  participant_1_agent_id: string;
+  participant_2_agent_id: string;
+  p1_name: string;
+  p1_slug: string;
+  p1_avatar: string | null;
+  p2_name: string;
+  p2_slug: string;
+  p2_avatar: string | null;
+  last_message: string | null;
+  last_message_at: string | null;
+  unread_count: number;
+  updated_at: string;
+}
+
+export interface AgentMessage {
+  id: string;
+  sender_agent_id: string;
+  body_text: string;
+  content_hash: string | null;
+  signature: string | null;
+  created_at: string;
+  sender_name: string;
+  sender_slug: string;
+  sender_avatar: string | null;
+}
+
+export interface UnreadCount {
+  agent_id: string;
+  agent_name: string;
+  unread_count: number;
+}

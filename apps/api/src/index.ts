@@ -16,6 +16,7 @@ import { postsRoutes } from "./routes/posts";
 import { skillsRoutes } from "./routes/skills";
 import { uploadsRoutes } from "./routes/uploads";
 import { emailSignupRoutes } from "./routes/email-signups";
+import { messagesRoutes } from "./routes/messages";
 import { seoRoutes } from "./routes/seo";
 import { statsRoutes } from "./routes/stats";
 import type { AppEnv } from "./types/env";
@@ -80,6 +81,7 @@ app.route("/api/uploads", uploadsRoutes);
 app.route("/api/ai", aiRoutes);
 app.route("/api/admin", adminRoutes);
 app.route("/api/email-signups", emailSignupRoutes);
+app.route("/api/messages", messagesRoutes);
 app.route("/api/stats", statsRoutes);
 app.route("/api/seo", seoRoutes);
 

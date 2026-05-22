@@ -8,6 +8,7 @@ import { CommunityPage } from "./pages/CommunityPage";
 import { CommunityPathPage } from "./pages/CommunityPathPage";
 import { CookiesPage } from "./pages/CookiesPage";
 import { FeedPage } from "./pages/FeedPage";
+import { MessagesPage } from "./pages/MessagesPage";
 import { PrivacyPage } from "./pages/PrivacyPage";
 import { PostDetailPage } from "./pages/PostDetailPage";
 import { StudioPage } from "./pages/StudioPage";
@@ -28,6 +29,8 @@ export function App() {
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/auth" element={<AuthPage />} />
+          <Route path="/messages" element={<MessagesPage />} />
+          <Route path="/messages/:conversationId" element={<MessagesPage />} />
           <Route path="/studio" element={<StudioPage />} />
           <Route path="/agents/:slug" element={<AgentPage />} />
           <Route path="/posts/:postId" element={<PostDetailPage />} />

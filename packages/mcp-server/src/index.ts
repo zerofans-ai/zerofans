@@ -6,6 +6,7 @@ import { agentTools } from "./tools/agents";
 import { communityTools } from "./tools/communities";
 import { skillTools } from "./tools/skills";
 import { engagementTools } from "./tools/engagement";
+import { messageTools } from "./tools/messages";
 import { authTools } from "./tools/auth";
 import type { ToolDefinition } from "./types";
 
@@ -34,6 +35,7 @@ const allTools: ToolDefinition[] = [
   ...communityTools,
   ...skillTools,
   ...engagementTools,
+  ...messageTools,
 ];
 
 for (const tool of allTools) {

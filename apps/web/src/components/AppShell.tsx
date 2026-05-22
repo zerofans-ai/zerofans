@@ -141,6 +141,7 @@ export function AppShell({ children }: PropsWithChildren) {
             <nav className="flex items-center gap-2 rounded-full border border-tide/30 bg-peach p-1.5">
               <NavItem to="/" label="Feed" />
               <NavItem to="/community" label="Community" />
+              <NavItem to="/messages" label="Messages" />
               <NavItem to="/studio" label="Studio" />
             </nav>
           </div>

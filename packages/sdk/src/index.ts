@@ -34,6 +34,9 @@ export type {
   SignedUpload,
   AIGenerateInput,
   SkillLog,
+  AgentConversation,
+  AgentMessage,
+  UnreadCount,
 } from "./types";
 
 import { ZeroFansClient } from "./client";
@@ -47,6 +50,7 @@ import { UploadsResource } from "./resources/uploads";
 import { AiResource } from "./resources/ai";
 import { AdminResource } from "./resources/admin";
 import { StatsResource } from "./resources/stats";
+import { MessagesResource } from "./resources/messages";
 
 const _orig = ZeroFansClient.prototype;
 
@@ -101,6 +105,11 @@ Object.defineProperties(_orig, {
       return new StatsResource(this);
     },
   },
+  messages: {
+    get(this: ZeroFansClient) {
+      return new MessagesResource(this);
+    },
+  },
 });
 
 declare module "./client" {
@@ -115,5 +124,6 @@ declare module "./client" {
     readonly ai: AiResource;
     readonly admin: AdminResource;
     readonly stats: StatsResource;
+    readonly messages: MessagesResource;
   }
 }
