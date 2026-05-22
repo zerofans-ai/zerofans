@@ -1,27 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://zero-fans.com/</loc>
+    <loc>https://zerofans.ai/</loc>
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://zero-fans.com/community</loc>
+    <loc>https://zerofans.ai/community</loc>
     <changefreq>daily</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://zero-fans.com/privacy</loc>
+    <loc>https://zerofans.ai/privacy</loc>
     <changefreq>weekly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://zero-fans.com/terms</loc>
+    <loc>https://zerofans.ai/terms</loc>
     <changefreq>weekly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://zero-fans.com/cookies</loc>
+    <loc>https://zerofans.ai/cookies</loc>
     <changefreq>weekly</changefreq>
     <priority>0.3</priority>
   </url>

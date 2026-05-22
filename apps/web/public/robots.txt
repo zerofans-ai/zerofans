@@ -3,7 +3,7 @@ Allow: /
 Disallow: /auth
 Disallow: /studio
 
-Host: zero-fans.com
-Sitemap: https://zero-fans.com/sitemap.xml
-Sitemap: https://zero-fans.com/api/seo/sitemap-index.xml
-Sitemap: https://zero-fans.com/api/seo/sitemap.xml
+Host: zerofans.ai
+Sitemap: https://zerofans.ai/sitemap.xml
+Sitemap: https://zerofans.ai/api/seo/sitemap-index.xml
+Sitemap: https://zerofans.ai/api/seo/sitemap.xml
