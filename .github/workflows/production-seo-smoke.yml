@@ -1,9 +1,10 @@
 name: Production SEO Smoke
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["Deploy to Cloudflare"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       site_url:
@@ -15,6 +16,7 @@ jobs:
   seo-smoke:
     name: Live SEO Smoke Check
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     timeout-minutes: 10
     steps:
       - name: Resolve Site URL
