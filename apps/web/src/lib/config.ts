@@ -20,7 +20,7 @@ function inferApiBaseUrl(): string {
     return "http://127.0.0.1:8787";
   }
 
-  const isZeroFansDomain = hostname === "zerofans.ai" || hostname === "zerofans.ai";
+  const isZeroFansDomain = hostname === "zerofans.ai" || hostname === "www.zerofans.ai";
   if (isZeroFansDomain) {
     return origin;
   }
@@ -41,5 +41,4 @@ export const SITE_BASE_URL = configuredSiteUrl
     ? trimTrailingSlash(window.location.origin)
     : "https://zerofans.ai";
 
-export const ZEROCLAWLABS_URL = "https://www.zero-fans.com";
 export const SEO_SOCIAL_IMAGE_PATH = "/icons/zeroclawfans.png";
