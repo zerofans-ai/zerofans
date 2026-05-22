@@ -1,8 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { sql } from "drizzle-orm";
 import type { AppEnv } from "../types/env";
-import type { Database } from "../db";
 
 export const statsRoutes = new Hono<AppEnv>();
 
@@ -13,23 +11,23 @@ const trendingQuerySchema = z.object({
 
 // Root stats endpoint
 statsRoutes.get("/", async (c) => {
-  const db = c.get("db");
+  const sql = c.get("sql");
 
   const [agentsRow, visitorsRow, postsRow] = await Promise.all([
-    db.execute(sql`SELECT COUNT(*) AS count FROM agents`),
-    db.execute(sql`SELECT COUNT(*) AS count FROM users`),
-    db.execute(sql`SELECT COUNT(*) AS count FROM posts WHERE deleted_at IS NULL`),
+    sql`SELECT COUNT(*) AS count FROM agents`,
+    sql`SELECT COUNT(*) AS count FROM users`,
+    sql`SELECT COUNT(*) AS count FROM posts WHERE deleted_at IS NULL`,
   ]);
 
   return c.json({
-    agents: (agentsRow.rows[0] as Record<string, unknown>)?.count ?? 0,
-    visitors: (visitorsRow.rows[0] as Record<string, unknown>)?.count ?? 0,
-    posts: (postsRow.rows[0] as Record<string, unknown>)?.count ?? 0,
+    agents: Number((agentsRow[0] as Record<string, unknown>)?.count ?? 0),
+    visitors: Number((visitorsRow[0] as Record<string, unknown>)?.count ?? 0),
+    posts: Number((postsRow[0] as Record<string, unknown>)?.count ?? 0),
   });
 });
 
 statsRoutes.get("/usage", async (c) => {
-  const db = c.get("db");
+  const sql = c.get("sql");
 
   const [
     agentsRow,
@@ -40,22 +38,22 @@ statsRoutes.get("/usage", async (c) => {
     subscribersRow,
     newsletterRow,
   ] = await Promise.all([
-    db.execute(sql`SELECT COUNT(*) AS count FROM agents`),
-    db.execute(sql`SELECT COUNT(*) AS count FROM users`),
-    db.execute(sql`SELECT COUNT(*) AS count FROM posts WHERE deleted_at IS NULL`),
-    db.execute(sql`SELECT COUNT(*) AS count FROM comments`),
-    db.execute(sql`SELECT COUNT(*) AS count FROM likes`),
-    db.execute(sql`SELECT COUNT(*) AS count FROM subscriptions WHERE status = 'active'`),
-    db.execute(sql`SELECT COUNT(*) AS count FROM email_signups`),
+    sql`SELECT COUNT(*) AS count FROM agents`,
+    sql`SELECT COUNT(*) AS count FROM users`,
+    sql`SELECT COUNT(*) AS count FROM posts WHERE deleted_at IS NULL`,
+    sql`SELECT COUNT(*) AS count FROM comments`,
+    sql`SELECT COUNT(*) AS count FROM likes`,
+    sql`SELECT COUNT(*) AS count FROM subscriptions WHERE status = 'active'`,
+    sql`SELECT COUNT(*) AS count FROM email_signups`,
   ]);
 
-  const agents = Number((agentsRow.rows[0] as Record<string, unknown>)?.count ?? 0);
-  const visitors = Number((visitorsRow.rows[0] as Record<string, unknown>)?.count ?? 0);
-  const posts = Number((postsRow.rows[0] as Record<string, unknown>)?.count ?? 0);
-  const commentsCount = Number((commentsRow.rows[0] as Record<string, unknown>)?.count ?? 0);
-  const likesCount = Number((likesRow.rows[0] as Record<string, unknown>)?.count ?? 0);
-  const subscribers = Number((subscribersRow.rows[0] as Record<string, unknown>)?.count ?? 0);
-  const newsletterSubscribers = Number((newsletterRow.rows[0] as Record<string, unknown>)?.count ?? 0);
+  const agents = Number((agentsRow[0] as Record<string, unknown>)?.count ?? 0);
+  const visitors = Number((visitorsRow[0] as Record<string, unknown>)?.count ?? 0);
+  const posts = Number((postsRow[0] as Record<string, unknown>)?.count ?? 0);
+  const commentsCount = Number((commentsRow[0] as Record<string, unknown>)?.count ?? 0);
+  const likesCount = Number((likesRow[0] as Record<string, unknown>)?.count ?? 0);
+  const subscribers = Number((subscribersRow[0] as Record<string, unknown>)?.count ?? 0);
+  const newsletterSubscribers = Number((newsletterRow[0] as Record<string, unknown>)?.count ?? 0);
 
   return c.json({
     agents,
@@ -65,18 +63,12 @@ statsRoutes.get("/usage", async (c) => {
     likes: likesCount,
     subscribers,
     newsletterSubscribers,
-    // Legacy aliases preserved for compatibility with previously deployed clients.
     zeroClaws: agents,
     zeros: visitors,
   });
 });
 
 // ─── Trending Tags ─────────────────────────────────────────────
-// Computes trending tags/skills/tools weighted by:
-//   - agent count using the tag
-//   - total followers of agents using it
-//   - total posts by agents using it
-//   - recency bonus (agents created in last 7 days get 2x weight)
 
 statsRoutes.get("/trending", async (c) => {
   const parsed = trendingQuerySchema.safeParse({
@@ -90,10 +82,9 @@ statsRoutes.get("/trending", async (c) => {
   const limit = parsed.data.limit ?? 12;
   const filterType = parsed.data.type ?? "all";
 
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  // Pull all agents with their tags, skills, tools, follower counts, post counts, and creation date
-  const rows = await db.execute(sql`
+  const rows = await sql`
     SELECT
       a.personality_tags_json,
       a.skills_json,
@@ -105,7 +96,7 @@ statsRoutes.get("/trending", async (c) => {
     FROM agents a
     ORDER BY a.created_at DESC
     LIMIT 200
-  `);
+  `;
 
   const now = Date.now();
   const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
@@ -131,8 +122,7 @@ statsRoutes.get("/trending", async (c) => {
     tagScores.set(key, existing);
   }
 
-  for (const row of rows.rows) {
-    const data = row as Record<string, unknown>;
+  for (const data of rows) {
     const createdAt = new Date(data.created_at as string | Date).getTime();
     const recencyBonus = now - createdAt < SEVEN_DAYS ? 2 : 1;
     const activityWeight =

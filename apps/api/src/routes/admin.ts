@@ -1,11 +1,8 @@
 import { Hono } from "hono";
-import { z } from "zod";
-import { eq, sql, and, isNull } from "drizzle-orm";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
+import { firstRow } from "../db";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
-import { users, posts } from "../db/schema";
-import { firstRow } from "../db";
 
 export const adminRoutes = new Hono<AppEnv>();
 
@@ -24,48 +21,36 @@ adminRoutes.use("*", requireAuth, async (c, next) => {
 
 adminRoutes.post("/content/:postId/remove", async (c) => {
   const postId = c.req.param("postId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const post = await firstRow(db
-    .select({ id: posts.id })
-    .from(posts)
-    .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
-  );
+  const post = await firstRow(sql`
+    SELECT id FROM posts WHERE id = ${postId} AND deleted_at IS NULL
+  `);
   if (!post) {
     return notFound(c, "Post not found");
   }
 
-  await db
-    .update(posts)
-    .set({
-      deletedAt: sql`now()`,
-      updatedAt: sql`now()`,
-    })
-    .where(eq(posts.id, postId));
+  await sql`
+    UPDATE posts SET deleted_at = now(), updated_at = now() WHERE id = ${postId}
+  `;
 
   return c.json({ success: true });
 });
 
 adminRoutes.post("/users/:userId/suspend", async (c) => {
   const userId = c.req.param("userId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const user = await firstRow(db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.id, userId))
-  );
+  const user = await firstRow(sql`
+    SELECT id FROM users WHERE id = ${userId}
+  `);
   if (!user) {
     return notFound(c, "User not found");
   }
 
-  await db
-    .update(users)
-    .set({
-      suspendedAt: sql`now()`,
-      updatedAt: sql`now()`,
-    })
-    .where(eq(users.id, userId));
+  await sql`
+    UPDATE users SET suspended_at = now(), updated_at = now() WHERE id = ${userId}
+  `;
 
   return c.json({ success: true });
 });

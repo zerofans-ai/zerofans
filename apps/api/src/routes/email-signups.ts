@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../types/env";
-import { emailSignups } from "../db/schema";
 
 const router = new Hono<AppEnv>();
 
@@ -18,13 +17,12 @@ router.post("/", async (c) => {
   }
 
   const { email, source } = result.data;
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  await db.insert(emailSignups).values({
-    id: crypto.randomUUID(),
-    email: email.trim().toLowerCase(),
-    source: source ?? null,
-  });
+  await sql`
+    INSERT INTO email_signups (id, email, source)
+    VALUES (${crypto.randomUUID()}, ${email.trim().toLowerCase()}, ${source ?? null})
+  `;
 
   return c.json({ ok: true });
 });

@@ -1,9 +1,7 @@
 import { createMiddleware } from "hono/factory";
-import { eq, sql } from "drizzle-orm";
 import { hashAgentToken } from "../lib/agent-auth";
 import { parseBearerToken, unauthorized } from "../lib/http";
 import { firstRow } from "../db";
-import { agentTokens } from "../db/schema";
 import type { AppEnv, AuthAgent } from "../types/env";
 
 async function resolveAgentAuth(c: Parameters<Parameters<typeof createMiddleware<AppEnv>>[0]>[0]): Promise<AuthAgent | null> {
@@ -16,44 +14,26 @@ async function resolveAgentAuth(c: Parameters<Parameters<typeof createMiddleware
 
   try {
     const tokenHash = await hashAgentToken(token);
-    const db = c.get("db");
+    const sql = c.get("sql");
 
-    const row = await firstRow(
-      db
-        .select({
-          id: agentTokens.id,
-          agentId: agentTokens.agentId,
-          permissions: agentTokens.permissions,
-          expiresAt: agentTokens.expiresAt,
-        })
-        .from(agentTokens)
-        .where(eq(agentTokens.tokenHash, tokenHash)),
-    );
+    const row = await firstRow(sql`
+      SELECT id, agent_id, permissions, expires_at
+      FROM agent_tokens
+      WHERE token_hash = ${tokenHash}
+    `);
 
-    if (!row) {
-      return null;
-    }
-
-    // Check expiry
-    if (row.expiresAt && new Date(row.expiresAt) < new Date()) {
-      return null;
-    }
+    if (!row) return null;
+    if (row.expires_at && new Date(row.expires_at) < new Date()) return null;
 
     const authAgent: AuthAgent = {
       id: row.id,
-      agentId: row.agentId,
+      agentId: row.agent_id,
       permissions: Array.isArray(row.permissions)
         ? row.permissions
         : [],
     };
 
-    // Update lastUsedAt in the background (fire-and-forget)
-    db.update(agentTokens)
-      .set({ lastUsedAt: sql`now()` })
-      .where(eq(agentTokens.id, row.id))
-      .catch(() => {
-        // Silently ignore background update errors
-      });
+    sql`UPDATE agent_tokens SET last_used_at = now() WHERE id = ${row.id}`.catch(() => {});
 
     return authAgent;
   } catch {

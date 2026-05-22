@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { eq, inArray, sql } from "drizzle-orm";
+import { SignJWT, jwtVerify } from "jose";
 import { badRequest, unauthorized } from "../lib/http";
 import { firstRow } from "../db";
 import { issueAccessToken } from "../lib/jwt";
@@ -12,21 +12,6 @@ import {
 import { requireAuth } from "../middleware/auth";
 import { writeAuditLog } from "../lib/audit";
 import type { AppEnv, AuthUser } from "../types/env";
-import {
-  users,
-  agents,
-  posts,
-  comments,
-  likes,
-  follows,
-  subscriptions,
-  agentRelationships,
-  agentCommunities,
-  communityMembers,
-  communityMessages,
-  agentSkills,
-  skillExecutionLogs,
-} from "../db/schema";
 
 const MINIMUM_AGE = 13;
 
@@ -101,7 +86,7 @@ authRoutes.post("/signup", async (c) => {
   const email = parsed.data.email.trim().toLowerCase();
   const handle = parsed.data.handle.trim().toLowerCase();
   const password = parsed.data.password;
-  const db = c.get("db");
+  const sql = c.get("sql");
 
   // Age gate (COPPA)
   let dateOfBirth: string | null = null;
@@ -113,11 +98,9 @@ authRoutes.post("/signup", async (c) => {
     dateOfBirth = parsed.data.dateOfBirth;
   }
 
-  const existing = await firstRow(db
-    .select({ id: users.id })
-    .from(users)
-    .where(sql`lower(${users.email}) = lower(${email}) OR lower(${users.handle}) = lower(${handle})`)
-  );
+  const existing = await firstRow(sql`
+    SELECT id FROM users WHERE lower(email) = lower(${email}) OR lower(handle) = lower(${handle})
+  `);
 
   if (existing) {
     return c.json({ error: "Email or handle already exists" }, 409);
@@ -127,21 +110,15 @@ authRoutes.post("/signup", async (c) => {
   const { hash } = await hashPassword(password);
   const now = new Date();
 
-  await db.insert(users).values({
-    id: userId,
-    email,
-    handle,
-    passwordHash: hash,
-    passwordSalt: null,
-    dateOfBirth,
-    termsAcceptedAt: parsed.data.termsAccepted ? now : null,
-    privacyAcceptedAt: parsed.data.termsAccepted ? now : null,
-  });
+  await sql`
+    INSERT INTO users (id, email, handle, password_hash, password_salt, date_of_birth, terms_accepted_at, privacy_accepted_at)
+    VALUES (${userId}, ${email}, ${handle}, ${hash}, NULL, ${dateOfBirth}, ${parsed.data.termsAccepted ? now : null}, ${parsed.data.termsAccepted ? now : null})
+  `;
 
   const user = { id: userId, email, handle, role: "user" as const };
   const token = await issueAccessToken(user, c.env);
 
-  await writeAuditLog(db, {
+  await writeAuditLog(sql, {
     actorUserId: userId,
     action: "account_created",
     targetType: "user",
@@ -160,29 +137,27 @@ authRoutes.post("/login", async (c) => {
 
   const email = parsed.data.email.trim().toLowerCase();
   const password = parsed.data.password;
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const userRow = await firstRow(db
-    .select()
-    .from(users)
-    .where(sql`lower(${users.email}) = lower(${email})`)
-  );
+  const userRow = await firstRow(sql`
+    SELECT * FROM users WHERE lower(email) = lower(${email})
+  `);
 
   if (
     !userRow ||
-    !userRow.passwordHash
+    !userRow.password_hash
   ) {
     return unauthorized(c, "Invalid email or password");
   }
 
-  if (userRow.suspendedAt) {
+  if (userRow.suspended_at) {
     return c.json({ error: "Account is suspended" }, 403);
   }
 
   const { valid, needsRehash } = await verifyPassword(
     password,
-    userRow.passwordSalt,
-    userRow.passwordHash,
+    userRow.password_salt,
+    userRow.password_hash,
   );
 
   if (!valid) {
@@ -192,13 +167,12 @@ authRoutes.post("/login", async (c) => {
   // Upgrade legacy SHA-256 to bcrypt on login
   if (needsRehash) {
     const { hash: newHash } = await rehashPassword(password);
-    await db
-      .update(users)
-      .set({ passwordHash: newHash, passwordSalt: null })
-      .where(eq(users.id, userRow.id));
+    await sql`
+      UPDATE users SET password_hash = ${newHash}, password_salt = NULL WHERE id = ${userRow.id}
+    `;
   }
 
-  const user = formatAuthUser(userRow);
+  const user = formatAuthUser(userRow as { id: string; email: string; handle: string; role: "user" | "admin" });
   const token = await issueAccessToken(user, c.env);
 
   return c.json({ token, user });
@@ -207,7 +181,7 @@ authRoutes.post("/login", async (c) => {
 authRoutes.post("/guest", async (c) => {
   const body = (await c.req.json().catch(() => null)) ?? {};
   const parsed = guestSchema.safeParse(body);
-  const db = c.get("db");
+  const sql = c.get("sql");
 
   const rawDeviceId =
     parsed.success && parsed.data.deviceId
@@ -220,33 +194,29 @@ authRoutes.post("/guest", async (c) => {
   const handle = `guest_${safeId.slice(0, 10)}`;
   const email = `${handle}@guest.zerofans`;
 
-  let userRow = await firstRow(db
-    .select()
-    .from(users)
-    .where(eq(users.handle, handle))
-  );
+  let userRow = await firstRow(sql`
+    SELECT * FROM users WHERE handle = ${handle}
+  `);
 
   if (!userRow) {
     const passwordSeed = crypto.randomUUID();
     const { hash } = await hashPassword(passwordSeed);
     const userId = crypto.randomUUID();
 
-    await db.insert(users).values({
-      id: userId,
-      email,
-      handle,
-      passwordHash: hash,
-    });
+    await sql`
+      INSERT INTO users (id, email, handle, password_hash)
+      VALUES (${userId}, ${email}, ${handle}, ${hash})
+    `;
 
     userRow = {
       id: userId,
       email,
       handle,
       role: "user" as const,
-    } as typeof users.$inferSelect;
+    } as Record<string, unknown>;
   }
 
-  const user = formatAuthUser(userRow);
+  const user = formatAuthUser(userRow as { id: string; email: string; handle: string; role: "user" | "admin" });
   const token = await issueAccessToken(user, c.env);
 
   return c.json({ token, user });
@@ -257,24 +227,22 @@ authRoutes.get("/me", requireAuth, async (c) => {
   if (!authUser) {
     return unauthorized(c);
   }
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const row = await firstRow(db
-    .select()
-    .from(users)
-    .where(eq(users.id, authUser.id))
-  );
+  const row = await firstRow(sql`
+    SELECT * FROM users WHERE id = ${authUser.id}
+  `);
 
   if (!row) {
     return unauthorized(c);
   }
 
   let socials: Array<{ platform: string; url: string }> = [];
-  if (Array.isArray(row.socialsJson)) {
-    socials = row.socialsJson;
-  } else if (typeof row.socialsJson === "string") {
+  if (Array.isArray(row.socials_json)) {
+    socials = row.socials_json;
+  } else if (typeof row.socials_json === "string") {
     try {
-      const parsed = JSON.parse(row.socialsJson);
+      const parsed = JSON.parse(row.socials_json);
       if (Array.isArray(parsed)) socials = parsed;
     } catch {
       /* empty */
@@ -287,9 +255,9 @@ authRoutes.get("/me", requireAuth, async (c) => {
       email: row.email,
       handle: row.handle,
       role: row.role,
-      avatar_url: row.avatarUrl,
+      avatar_url: row.avatar_url,
       socials,
-      created_at: row.createdAt,
+      created_at: row.created_at,
     },
   });
 });
@@ -306,23 +274,30 @@ authRoutes.patch("/me", requireAuth, async (c) => {
     return badRequest(c, "Invalid profile update payload");
   }
 
-  const db = c.get("db");
-  const updates: Partial<typeof users.$inferInsert> = {};
+  const sql = c.get("sql");
+  const hasAvatar = parsed.data.avatarUrl !== undefined;
+  const hasSocials = parsed.data.socials !== undefined;
 
-  if (parsed.data.avatarUrl !== undefined) {
-    updates.avatarUrl = parsed.data.avatarUrl;
-  }
-  if (parsed.data.socials !== undefined) {
-    updates.socialsJson = parsed.data.socials;
-  }
-
-  if (Object.keys(updates).length === 0) {
+  if (!hasAvatar && !hasSocials) {
     return badRequest(c, "No fields to update");
   }
 
-  await db.update(users).set(updates).where(eq(users.id, authUser.id));
+  if (hasAvatar && hasSocials) {
+    await sql`
+      UPDATE users SET avatar_url = ${parsed.data.avatarUrl}, socials_json = ${JSON.stringify(parsed.data.socials!)}::jsonb
+      WHERE id = ${authUser.id}
+    `;
+  } else if (hasAvatar) {
+    await sql`
+      UPDATE users SET avatar_url = ${parsed.data.avatarUrl} WHERE id = ${authUser.id}
+    `;
+  } else {
+    await sql`
+      UPDATE users SET socials_json = ${JSON.stringify(parsed.data.socials!)}::jsonb WHERE id = ${authUser.id}
+    `;
+  }
 
-  await writeAuditLog(db, {
+  await writeAuditLog(sql, {
     actorUserId: authUser.id,
     action: "profile_updated",
     targetType: "user",
@@ -337,64 +312,54 @@ authRoutes.patch("/me", requireAuth, async (c) => {
 authRoutes.get("/me/export", requireAuth, async (c) => {
   const authUser = c.get("authUser");
   if (!authUser) return unauthorized(c);
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const userRow = await firstRow(db
-    .select()
-    .from(users)
-    .where(eq(users.id, authUser.id))
-  );
+  const userRow = await firstRow(sql`
+    SELECT * FROM users WHERE id = ${authUser.id}
+  `);
   if (!userRow) return unauthorized(c);
 
-  const userAgents = await db
-    .select()
-    .from(agents)
-    .where(eq(agents.ownerUserId, authUser.id));
+  const userAgents = await sql`
+    SELECT * FROM agents WHERE owner_user_id = ${authUser.id}
+  `;
 
-  const agentIds = userAgents.map((a) => a.id);
+  const agentIds = userAgents.map((a: Record<string, unknown>) => a.id as string);
 
-  const userPosts =
-    agentIds.length > 0
-      ? await db
-          .select()
-          .from(posts)
-          .where(inArray(posts.agentId, agentIds))
-      : [];
+  let userPosts: Record<string, unknown>[] = [];
+  if (agentIds.length > 0) {
+    userPosts = await sql`
+      SELECT * FROM posts WHERE agent_id = ANY(${agentIds})
+    `;
+  }
 
-  const userComments = await db
-    .select()
-    .from(comments)
-    .where(eq(comments.userId, authUser.id));
+  const userComments = await sql`
+    SELECT * FROM comments WHERE user_id = ${authUser.id}
+  `;
 
-  const userLikes = await db
-    .select()
-    .from(likes)
-    .where(eq(likes.userId, authUser.id));
+  const userLikes = await sql`
+    SELECT * FROM likes WHERE user_id = ${authUser.id}
+  `;
 
-  const userFollows = await db
-    .select()
-    .from(follows)
-    .where(eq(follows.userId, authUser.id));
+  const userFollows = await sql`
+    SELECT * FROM follows WHERE user_id = ${authUser.id}
+  `;
 
-  const userSubs = await db
-    .select()
-    .from(subscriptions)
-    .where(eq(subscriptions.userId, authUser.id));
+  const userSubs = await sql`
+    SELECT * FROM subscriptions WHERE user_id = ${authUser.id}
+  `;
 
-  const userCommunityMemberships = await db
-    .select()
-    .from(communityMembers)
-    .where(eq(communityMembers.userId, authUser.id));
+  const userCommunityMemberships = await sql`
+    SELECT * FROM community_members WHERE user_id = ${authUser.id}
+  `;
 
-  const userEquippedSkills =
-    agentIds.length > 0
-      ? await db
-          .select()
-          .from(agentSkills)
-          .where(inArray(agentSkills.agentId, agentIds))
-      : [];
+  let userEquippedSkills: Record<string, unknown>[] = [];
+  if (agentIds.length > 0) {
+    userEquippedSkills = await sql`
+      SELECT * FROM agent_skills WHERE agent_id = ANY(${agentIds})
+    `;
+  }
 
-  await writeAuditLog(db, {
+  await writeAuditLog(sql, {
     actorUserId: authUser.id,
     action: "data_export",
     targetType: "user",
@@ -408,8 +373,8 @@ authRoutes.get("/me/export", requireAuth, async (c) => {
       email: userRow.email,
       handle: userRow.handle,
       role: userRow.role,
-      avatar_url: userRow.avatarUrl,
-      created_at: userRow.createdAt,
+      avatar_url: userRow.avatar_url,
+      created_at: userRow.created_at,
     },
     agents: userAgents,
     posts: userPosts,
@@ -427,54 +392,254 @@ authRoutes.get("/me/export", requireAuth, async (c) => {
 authRoutes.delete("/me/account", requireAuth, async (c) => {
   const authUser = c.get("authUser");
   if (!authUser) return unauthorized(c);
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  await db.transaction(async (tx) => {
-    const userAgents = await tx
-      .select({ id: agents.id })
-      .from(agents)
-      .where(eq(agents.ownerUserId, authUser.id));
-    const agentIds = userAgents.map((a) => a.id);
+  // Note: neon serverless does not support transactions natively.
+  // We execute deletes sequentially. If a partial failure occurs, some data may remain.
+  // For full transactional safety, a pooled connection or migration to a transaction-supporting driver is needed.
 
-    // Write audit log before user is deleted (FK dependency)
-    await writeAuditLog(tx, {
-      actorUserId: authUser.id,
-      action: "account_deleted",
-      targetType: "user",
-      targetId: authUser.id,
-    });
+  const userAgents = await sql`
+    SELECT id FROM agents WHERE owner_user_id = ${authUser.id}
+  `;
+  const agentIds = userAgents.map((a: Record<string, unknown>) => a.id as string);
 
-    // Cascade delete agent-related data
-    if (agentIds.length > 0) {
-      await tx
-        .delete(skillExecutionLogs)
-        .where(inArray(skillExecutionLogs.agentId, agentIds));
-      await tx
-        .delete(agentSkills)
-        .where(inArray(agentSkills.agentId, agentIds));
-      await tx
-        .delete(agentRelationships)
-        .where(
-          sql`${agentRelationships.sourceAgentId} IN (${sql.join(agentIds.map((id) => sql`${id}`), sql`, `)}) OR ${agentRelationships.targetAgentId} IN (${sql.join(agentIds.map((id) => sql`${id}`), sql`, `)})`,
-        );
-      await tx.delete(posts).where(inArray(posts.agentId, agentIds));
-      await tx
-        .delete(agentCommunities)
-        .where(inArray(agentCommunities.agentId, agentIds));
-      await tx.delete(agents).where(inArray(agents.id, agentIds));
-    }
-
-    // Delete user-level data
-    await tx.delete(communityMessages).where(eq(communityMessages.userId, authUser.id));
-    await tx.delete(communityMembers).where(eq(communityMembers.userId, authUser.id));
-    await tx.delete(comments).where(eq(comments.userId, authUser.id));
-    await tx.delete(likes).where(eq(likes.userId, authUser.id));
-    await tx.delete(follows).where(eq(follows.userId, authUser.id));
-    await tx.delete(subscriptions).where(eq(subscriptions.userId, authUser.id));
-
-    // Finally, delete the user
-    await tx.delete(users).where(eq(users.id, authUser.id));
+  // Write audit log before user is deleted (FK dependency)
+  await writeAuditLog(sql, {
+    actorUserId: authUser.id,
+    action: "account_deleted",
+    targetType: "user",
+    targetId: authUser.id,
   });
 
+  // Cascade delete agent-related data
+  if (agentIds.length > 0) {
+    await sql`
+      DELETE FROM skill_execution_logs WHERE agent_id = ANY(${agentIds})
+    `;
+    await sql`
+      DELETE FROM agent_skills WHERE agent_id = ANY(${agentIds})
+    `;
+    await sql`
+      DELETE FROM agent_relationships WHERE source_agent_id = ANY(${agentIds}) OR target_agent_id = ANY(${agentIds})
+    `;
+    await sql`
+      DELETE FROM posts WHERE agent_id = ANY(${agentIds})
+    `;
+    await sql`
+      DELETE FROM agent_communities WHERE agent_id = ANY(${agentIds})
+    `;
+    await sql`
+      DELETE FROM agents WHERE id = ANY(${agentIds})
+    `;
+  }
+
+  // Delete user-level data
+  await sql`
+    DELETE FROM community_messages WHERE user_id = ${authUser.id}
+  `;
+  await sql`
+    DELETE FROM community_members WHERE user_id = ${authUser.id}
+  `;
+  await sql`
+    DELETE FROM comments WHERE user_id = ${authUser.id}
+  `;
+  await sql`
+    DELETE FROM likes WHERE user_id = ${authUser.id}
+  `;
+  await sql`
+    DELETE FROM follows WHERE user_id = ${authUser.id}
+  `;
+  await sql`
+    DELETE FROM subscriptions WHERE user_id = ${authUser.id}
+  `;
+
+  // Finally, delete the user
+  await sql`
+    DELETE FROM users WHERE id = ${authUser.id}
+  `;
+
   return c.json({ success: true, message: "Account and all data deleted" });
+});
+
+// ── X (Twitter) OAuth 2.0 ──────────────────────────────────────────────
+
+const encoder = new TextEncoder();
+
+function base64url(buf: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+async function sha256(input: string): Promise<ArrayBuffer> {
+  return crypto.subtle.digest("SHA-256", encoder.encode(input));
+}
+
+function getSecret(secret: string): Uint8Array {
+  return encoder.encode(secret);
+}
+
+authRoutes.get("/twitter", async (c) => {
+  const clientId = c.env.TWITTER_CLIENT_ID;
+  const clientSecret = c.env.TWITTER_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return badRequest(c, "Twitter OAuth is not configured");
+  }
+
+  const codeVerifier = base64url(crypto.getRandomValues(new Uint8Array(32)).buffer);
+  const challengeBuf = await sha256(codeVerifier);
+  const codeChallenge = base64url(challengeBuf);
+
+  const state = await new SignJWT({ cv: codeVerifier })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuer(c.env.JWT_ISSUER)
+    .setIssuedAt()
+    .setExpirationTime("10m")
+    .sign(getSecret(c.env.JWT_SECRET));
+
+  const siteUrl = (c.env.SITE_URL || `https://${new URL(c.req.url).host}`).replace(/\/+$/, "");
+  const redirectUri = `${siteUrl}/api/auth/twitter/callback`;
+
+  const url = new URL("https://twitter.com/i/oauth2/authorize");
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("scope", "tweet.read users.read");
+  url.searchParams.set("state", state);
+  url.searchParams.set("code_challenge", codeChallenge);
+  url.searchParams.set("code_challenge_method", "S256");
+
+  return c.redirect(url.toString());
+});
+
+authRoutes.get("/twitter/callback", async (c) => {
+  const clientId = c.env.TWITTER_CLIENT_ID;
+  const clientSecret = c.env.TWITTER_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return badRequest(c, "Twitter OAuth is not configured");
+  }
+
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+  const error = c.req.query("error");
+
+  if (error) {
+    const siteUrl = (c.env.SITE_URL || `https://${new URL(c.req.url).host}`).replace(/\/+$/, "");
+    return c.redirect(`${siteUrl}/auth?oauth_error=${encodeURIComponent(error)}`);
+  }
+
+  if (!code || !state) {
+    return badRequest(c, "Missing code or state");
+  }
+
+  // Recover code_verifier from state JWT
+  let codeVerifier: string;
+  try {
+    const { payload } = await jwtVerify(state, getSecret(c.env.JWT_SECRET), {
+      issuer: c.env.JWT_ISSUER,
+    });
+    codeVerifier = payload.cv as string;
+    if (!codeVerifier) throw new Error("missing cv");
+  } catch {
+    return unauthorized(c, "Invalid OAuth state");
+  }
+
+  const siteUrl = (c.env.SITE_URL || `https://${new URL(c.req.url).host}`).replace(/\/+$/, "");
+  const redirectUri = `${siteUrl}/api/auth/twitter/callback`;
+
+  // Exchange code for token
+  const tokenRes = await fetch("https://api.twitter.com/2/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+    },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
+    }).toString(),
+  });
+
+  if (!tokenRes.ok) {
+    const body = await tokenRes.text();
+    console.error("Twitter token exchange failed:", body);
+    return unauthorized(c, "Twitter authentication failed");
+  }
+
+  const tokenData = (await tokenRes.json()) as { access_token: string };
+  const accessToken = tokenData.access_token;
+
+  // Fetch X user profile
+  const userRes = await fetch("https://api.twitter.com/2/users/me", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!userRes.ok) {
+    return unauthorized(c, "Failed to fetch Twitter profile");
+  }
+
+  const userData = (await userRes.json()) as {
+    data: { id: string; name: string; username: string };
+  };
+  const twitterId = userData.data.id;
+  const twitterHandle = userData.data.username;
+  const twitterName = userData.data.name;
+
+  const sql = c.get("sql");
+
+  // Look up existing user by twitter_id
+  let userRow = await firstRow(sql`
+    SELECT id, email, handle, role FROM users WHERE twitter_id = ${twitterId}
+  `);
+
+  let user: AuthUser;
+
+  if (userRow) {
+    // Update handle/avatar on each login
+    await sql`
+      UPDATE users SET twitter_handle = ${twitterHandle}, updated_at = now() WHERE id = ${userRow.id}
+    `;
+    user = {
+      id: userRow.id as string,
+      email: userRow.email as string,
+      handle: userRow.handle as string,
+      role: (userRow.role as "user" | "admin") ?? "user",
+    };
+  } else {
+    // Create new user
+    let handle = twitterHandle.toLowerCase().replace(/[^a-zA-Z0-9_]/g, "");
+    if (handle.length < 3) handle = `x_${handle}`;
+    if (handle.length > 30) handle = handle.slice(0, 30);
+
+    let finalHandle = handle;
+    let suffix = 1;
+    while (await firstRow(sql`SELECT id FROM users WHERE handle = ${finalHandle}`)) {
+      finalHandle = `${handle}_${suffix++}`;
+    }
+
+    const userId = crypto.randomUUID();
+    const { hash } = await hashPassword(crypto.randomUUID());
+    const email = `twitter_${twitterId}@oauth.zerofans`;
+
+    await sql`
+      INSERT INTO users (id, email, handle, password_hash, twitter_id, twitter_handle, auth_provider)
+      VALUES (${userId}, ${email}, ${finalHandle}, ${hash}, ${twitterId}, ${twitterHandle}, 'twitter')
+    `;
+
+    user = { id: userId, email, handle: finalHandle, role: "user" };
+
+    await writeAuditLog(sql, {
+      actorUserId: userId,
+      action: "account_created_twitter",
+      targetType: "user",
+      targetId: userId,
+    });
+  }
+
+  const token = await issueAccessToken(user, c.env);
+
+  return c.redirect(`${siteUrl}/auth?token=${encodeURIComponent(token)}`);
 });

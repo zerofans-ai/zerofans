@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
-import { SEO_SOCIAL_IMAGE_PATH, SITE_BASE_URL, ZEROCLAWLABS_URL } from "../lib/config";
+import { SEO_SOCIAL_IMAGE_PATH, SITE_BASE_URL } from "../lib/config";
 import { DEFAULT_DESCRIPTION, SEO_KEYWORDS, resolveSeo, overrideSeo } from "../lib/seo";
 import type { SeoPayload } from "../lib/seo";
 
@@ -69,7 +69,7 @@ export function SeoManager({ overrides }: SeoManagerProps = {}) {
     const canonicalUrl = new URL(seo.canonicalPath, `${SITE_BASE_URL}/`).toString();
     const defaultSocialImageUrl = new URL(SEO_SOCIAL_IMAGE_PATH, `${SITE_BASE_URL}/`).toString();
     const socialImageUrl = seo.ogImage || defaultSocialImageUrl;
-    const imageAlt = seo.ogImageAlt || "ZeroFans social graph by ZeroClaw Labs";
+    const imageAlt = seo.ogImageAlt || "ZeroFans — open source AI agent social graph";
     const keywords = seo.keywords ? `${seo.keywords}, ${SEO_KEYWORDS}` : SEO_KEYWORDS;
 
     document.title = seo.title;
@@ -77,7 +77,7 @@ export function SeoManager({ overrides }: SeoManagerProps = {}) {
     upsertMeta('meta[name="description"]', { name: "description" }, seo.description);
     upsertMeta('meta[name="keywords"]', { name: "keywords" }, keywords);
     upsertMeta('meta[name="robots"]', { name: "robots" }, seo.robots);
-    upsertMeta('meta[name="author"]', { name: "author" }, "ZeroClaw Labs");
+    upsertMeta('meta[name="author"]', { name: "author" }, "ZeroFans");
     upsertMeta(
       'meta[name="twitter:card"]',
       { name: "twitter:card" },
@@ -138,13 +138,13 @@ export function SeoManager({ overrides }: SeoManagerProps = {}) {
       "@graph": [
         {
           "@type": "Organization",
-          "@id": `${ZEROCLAWLABS_URL}/#organization`,
-          name: "ZeroClaw Labs",
-          url: ZEROCLAWLABS_URL,
+          "@id": `${SITE_BASE_URL}/#organization`,
+          name: "ZeroFans",
+          url: SITE_BASE_URL,
           logo: new URL(SEO_SOCIAL_IMAGE_PATH, `${SITE_BASE_URL}/`).toString(),
           sameAs: [
-            ZEROCLAWLABS_URL,
-            "https://x.com/zeroclawlabs",
+            SITE_BASE_URL,
+            "https://x.com/argenistherose",
             "https://github.com/zerofans-ai/zerofans",
           ],
         },
@@ -155,7 +155,7 @@ export function SeoManager({ overrides }: SeoManagerProps = {}) {
           name: "ZeroFans",
           description: DEFAULT_DESCRIPTION,
           publisher: {
-            "@id": `${ZEROCLAWLABS_URL}/#organization`,
+            "@id": `${SITE_BASE_URL}/#organization`,
           },
           inLanguage: "en-US",
         },
@@ -169,7 +169,7 @@ export function SeoManager({ overrides }: SeoManagerProps = {}) {
             "@id": `${SITE_BASE_URL}/#website`,
           },
           about: {
-            "@id": `${ZEROCLAWLABS_URL}/#organization`,
+            "@id": `${SITE_BASE_URL}/#organization`,
           },
           inLanguage: "en-US",
         },

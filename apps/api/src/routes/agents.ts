@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
-import { eq, sql, and, or, desc, asc } from "drizzle-orm";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { executeSkill, checkRateLimit } from "../lib/skill-engine";
@@ -10,18 +9,7 @@ import { generateKeyPair, encryptPrivateKey } from "../lib/signing";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import type { SkillDefinition } from "../types/skills";
-import type { Database } from "../db"
 import { firstRow } from "../db";
-import {
-  agents,
-  posts,
-  follows,
-  subscriptions,
-  agentRelationships,
-  skills,
-  agentSkills,
-  skillExecutionLogs,
-} from "../db/schema";
 
 const personalityTagSchema = z.string().trim().min(1).max(40);
 const capabilitySchema = z.string().trim().min(1).max(60);
@@ -85,22 +73,17 @@ async function ensureOwnedAgent(
     return null;
   }
 
-  const db = c.get("db");
-  const agent = await firstRow(db
-    .select({
-      id: agents.id,
-      ownerUserId: agents.ownerUserId,
-    })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-  );
+  const sql = c.get("sql");
+  const row = await firstRow(sql`
+    SELECT id, owner_user_id FROM agents WHERE id = ${agentId}
+  `) as Record<string, unknown> | undefined;
 
-  if (!agent) {
+  if (!row) {
     return null;
   }
 
-  if (authUser.role === "admin" || agent.ownerUserId === authUser.id) {
-    return agent;
+  if (authUser.role === "admin" || row.owner_user_id === authUser.id) {
+    return { id: row.id as string, ownerUserId: row.owner_user_id as string };
   }
 
   return null;
@@ -167,9 +150,9 @@ agentsRoutes.post("/", requireAuth, async (c) => {
     return badRequest(c, "Invalid agent payload");
   }
 
-  const db = c.get("db");
+  const sql = c.get("sql");
   const id = crypto.randomUUID();
-  const slug = await makeUniqueSlug(parsed.data.name, db);
+  const slug = await makeUniqueSlug(parsed.data.name, sql);
   const personalityTags = serializeStringArray(parsed.data.personalityTags);
   const skillsJson = serializeStringArray(parsed.data.skills);
   const cliTools = serializeStringArray(parsed.data.cliTools);
@@ -186,21 +169,21 @@ agentsRoutes.post("/", requireAuth, async (c) => {
     privateKeyEncrypted = await encryptPrivateKey(keyPair.privateKey, signingSecret);
   }
 
-  await db.insert(agents).values({
-    id,
-    ownerUserId: authUser.id,
-    name: parsed.data.name.trim(),
-    slug,
-    bio: parsed.data.bio ?? null,
-    personalityTagsJson: personalityTags,
-    skillsJson,
-    cliToolsJson: cliTools,
-    avatarUrl: parsed.data.avatarUrl ?? null,
-    bannerUrl: parsed.data.bannerUrl ?? null,
-    socialsJson: socials,
-    publicKey,
-    privateKeyEncrypted,
-  });
+  await sql`
+    INSERT INTO agents (
+      id, owner_user_id, name, slug, bio,
+      personality_tags_json, skills_json, cli_tools_json,
+      avatar_url, banner_url, socials_json,
+      public_key, private_key_encrypted
+    ) VALUES (
+      ${id}, ${authUser.id}, ${parsed.data.name.trim()}, ${slug},
+      ${parsed.data.bio ?? null},
+      ${personalityTags}, ${skillsJson}, ${cliTools},
+      ${parsed.data.avatarUrl ?? null}, ${parsed.data.bannerUrl ?? null},
+      ${socials},
+      ${publicKey}, ${privateKeyEncrypted}
+    )
+  `;
 
   return c.json({
     agent: {
@@ -232,62 +215,81 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
     return badRequest(c, "Invalid update payload");
   }
 
-  const db = c.get("db");
+  const sql = c.get("sql");
   const agentId = c.req.param("agentId");
 
-  const agent = await firstRow(db
-    .select({
-      id: agents.id,
-      ownerUserId: agents.ownerUserId,
-    })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-  );
+  const agent = await firstRow(sql`
+    SELECT id, owner_user_id FROM agents WHERE id = ${agentId}
+  `) as Record<string, unknown> | undefined;
 
   if (!agent) {
     return notFound(c, "Agent not found");
   }
 
-  const isOwner = agent.ownerUserId === authUser.id || authUser.role === "admin";
+  const isOwner = agent.owner_user_id === authUser.id || authUser.role === "admin";
   if (!isOwner) {
     return forbidden(c);
   }
 
-  const updates: Partial<typeof agents.$inferInsert> = {};
+  const hasUpdates =
+    parsed.data.name !== undefined ||
+    parsed.data.bio !== undefined ||
+    parsed.data.avatarUrl !== undefined ||
+    parsed.data.bannerUrl !== undefined ||
+    parsed.data.personalityTags !== undefined ||
+    parsed.data.skills !== undefined ||
+    parsed.data.cliTools !== undefined ||
+    parsed.data.socials !== undefined;
 
-  if (parsed.data.name !== undefined) {
-    updates.name = parsed.data.name.trim();
-  }
-  if (parsed.data.bio !== undefined) {
-    updates.bio = parsed.data.bio;
-  }
-  if (parsed.data.avatarUrl !== undefined) {
-    updates.avatarUrl = parsed.data.avatarUrl;
-  }
-  if (parsed.data.bannerUrl !== undefined) {
-    updates.bannerUrl = parsed.data.bannerUrl;
-  }
-  if (parsed.data.personalityTags !== undefined) {
-    updates.personalityTagsJson = serializeStringArray(parsed.data.personalityTags);
-  }
-  if (parsed.data.skills !== undefined) {
-    updates.skillsJson = serializeStringArray(parsed.data.skills);
-  }
-  if (parsed.data.cliTools !== undefined) {
-    updates.cliToolsJson = serializeStringArray(parsed.data.cliTools);
-  }
-  if (parsed.data.socials !== undefined) {
-    updates.socialsJson = parsed.data.socials;
-  }
-
-  if (Object.keys(updates).length === 0) {
+  if (!hasUpdates) {
     return badRequest(c, "No fields to update");
   }
 
-  await db
-    .update(agents)
-    .set({ ...updates, updatedAt: sql`now()` })
-    .where(eq(agents.id, agent.id));
+  await sql`
+    UPDATE agents SET
+      ${
+        parsed.data.name !== undefined
+          ? sql`name = ${parsed.data.name.trim()},`
+          : sql``
+      }
+      ${
+        parsed.data.bio !== undefined
+          ? sql`bio = ${parsed.data.bio},`
+          : sql``
+      }
+      ${
+        parsed.data.avatarUrl !== undefined
+          ? sql`avatar_url = ${parsed.data.avatarUrl},`
+          : sql``
+      }
+      ${
+        parsed.data.bannerUrl !== undefined
+          ? sql`banner_url = ${parsed.data.bannerUrl},`
+          : sql``
+      }
+      ${
+        parsed.data.personalityTags !== undefined
+          ? sql`personality_tags_json = ${serializeStringArray(parsed.data.personalityTags)},`
+          : sql``
+      }
+      ${
+        parsed.data.skills !== undefined
+          ? sql`skills_json = ${serializeStringArray(parsed.data.skills)},`
+          : sql``
+      }
+      ${
+        parsed.data.cliTools !== undefined
+          ? sql`cli_tools_json = ${serializeStringArray(parsed.data.cliTools)},`
+          : sql``
+      }
+      ${
+        parsed.data.socials !== undefined
+          ? sql`socials_json = ${parsed.data.socials},`
+          : sql``
+      }
+      updated_at = now()
+    WHERE id = ${agent.id}
+  `;
 
   return c.json({ success: true });
 });
@@ -298,17 +300,13 @@ agentsRoutes.get("/mine", requireAuth, async (c) => {
     return unauthorized(c);
   }
 
-  const db = c.get("db");
-  const rows = await db
-    .select({
-      id: agents.id,
-      name: agents.name,
-      slug: agents.slug,
-      created_at: agents.createdAt,
-    })
-    .from(agents)
-    .where(eq(agents.ownerUserId, authUser.id))
-    .orderBy(desc(agents.createdAt));
+  const sql = c.get("sql");
+  const rows = await sql`
+    SELECT id, name, slug, created_at
+    FROM agents
+    WHERE owner_user_id = ${authUser.id}
+    ORDER BY created_at DESC
+  `;
 
   return c.json({ items: rows });
 });
@@ -327,33 +325,20 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
   const query = `%${(parsed.data.q ?? "").trim().toLowerCase()}%`;
   const sort = parsed.data.sort ?? "popular";
 
-  const orderByClause =
-    sort === "newest"
-      ? sql`sub.created_at DESC`
-      : sort === "most-followers"
-        ? sql`(sub.followers_count + sub.agent_followers_count) DESC, sub.created_at DESC`
-        : sort === "most-posts"
-          ? sql`sub.posts_count DESC, sub.created_at DESC`
-          : // popular: weighted score
-            sql`(sub.followers_count * 2 + sub.subscribers_count * 3 + sub.agent_followers_count + sub.posts_count) DESC, sub.created_at DESC`;
+  let orderByClause: string;
+  if (sort === "newest") {
+    orderByClause = "sub.created_at DESC";
+  } else if (sort === "most-followers") {
+    orderByClause = "(sub.followers_count + sub.agent_followers_count) DESC, sub.created_at DESC";
+  } else if (sort === "most-posts") {
+    orderByClause = "sub.posts_count DESC, sub.created_at DESC";
+  } else {
+    // popular: weighted score
+    orderByClause = "(sub.followers_count * 2 + sub.subscribers_count * 3 + sub.agent_followers_count + sub.posts_count) DESC, sub.created_at DESC";
+  }
 
-  const db = c.get("db");
-  const rows = await db.execute<{
-    id: string;
-    name: string;
-    slug: string;
-    bio: string | null;
-    avatar_url: string | null;
-    banner_url: string | null;
-    personality_tags_json: unknown;
-    skills_json: unknown;
-    cli_tools_json: unknown;
-    socials_json: unknown;
-    followers_count: number;
-    subscribers_count: number;
-    agent_followers_count: number;
-    posts_count: number;
-  }>(sql`
+  const sql = c.get("sql");
+  const rows = await sql`
     SELECT sub.* FROM (
       SELECT
         a.id,
@@ -389,12 +374,12 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
        FROM agents a
        WHERE (${query} = '%%' OR lower(a.name) LIKE ${query} OR lower(COALESCE(a.bio, '')) LIKE ${query})
     ) sub
-    ORDER BY ${orderByClause}
+    ORDER BY ${sql.unsafe(orderByClause)}
     LIMIT ${limit}
-  `);
+  `;
 
   return c.json({
-    items: rows.rows.map((row) => ({
+    items: rows.map((row: Record<string, unknown>) => ({
       id: row.id,
       name: row.name,
       slug: row.slug,
@@ -405,10 +390,10 @@ agentsRoutes.get("/discover", optionalAuth, async (c) => {
       personalityTags: ensureStringArray(row.personality_tags_json),
       skills: ensureStringArray(row.skills_json),
       cliTools: ensureStringArray(row.cli_tools_json),
-      followersCount: row.followers_count ?? 0,
-      subscribersCount: row.subscribers_count ?? 0,
-      agentFollowersCount: row.agent_followers_count ?? 0,
-      postsCount: row.posts_count ?? 0,
+      followersCount: Number(row.followers_count ?? 0),
+      subscribersCount: Number(row.subscribers_count ?? 0),
+      agentFollowersCount: Number(row.agent_followers_count ?? 0),
+      postsCount: Number(row.posts_count ?? 0),
     })),
   });
 });
@@ -425,19 +410,19 @@ agentsRoutes.get("/:agentId/network", requireAuth, async (c) => {
     return forbidden(c, "You can only inspect network for your own agent");
   }
 
-  const db = c.get("db");
-  const rows = await db
-    .select({
-      target_agent_id: agentRelationships.targetAgentId,
-      relationship_type: agentRelationships.relationshipType,
-      status: agentRelationships.status,
-      target_agent_name: agents.name,
-      target_agent_slug: agents.slug,
-    })
-    .from(agentRelationships)
-    .innerJoin(agents, eq(agents.id, agentRelationships.targetAgentId))
-    .where(eq(agentRelationships.sourceAgentId, agentId))
-    .orderBy(desc(agentRelationships.updatedAt));
+  const sql = c.get("sql");
+  const rows = await sql`
+    SELECT
+      ar.target_agent_id,
+      ar.relationship_type,
+      ar.status,
+      a.name AS target_agent_name,
+      a.slug AS target_agent_slug
+    FROM agent_relationships ar
+    INNER JOIN agents a ON a.id = ar.target_agent_id
+    WHERE ar.source_agent_id = ${agentId}
+    ORDER BY ar.updated_at DESC
+  `;
 
   return c.json({ items: rows });
 });
@@ -455,23 +440,21 @@ agentsRoutes.post("/:agentId/network/follows/:targetAgentId", requireAuth, async
     return forbidden(c, "You can only manage relationships for your own agent");
   }
 
-  const db = c.get("db");
-  const targetAgent = await firstRow(db
-    .select({ id: agents.id })
-    .from(agents)
-    .where(eq(agents.id, targetAgentId))
-  );
+  const sql = c.get("sql");
+  const targetAgent = await firstRow(sql`
+    SELECT id FROM agents WHERE id = ${targetAgentId}
+  `);
   if (!targetAgent) {
     return notFound(c, "Target agent not found");
   }
 
-  await db.execute(sql`
+  await sql`
     INSERT INTO agent_relationships (
       id, source_agent_id, target_agent_id, relationship_type, status, created_at, updated_at
     ) VALUES (${crypto.randomUUID()}, ${agentId}, ${targetAgentId}, 'follow', 'active', now(), now())
     ON CONFLICT(source_agent_id, target_agent_id, relationship_type)
     DO UPDATE SET status = 'active', updated_at = now()
-  `);
+  `;
 
   return c.json({ success: true });
 });
@@ -488,17 +471,14 @@ agentsRoutes.delete(
       return forbidden(c, "You can only manage relationships for your own agent");
     }
 
-    const db = c.get("db");
-    await db
-      .update(agentRelationships)
-      .set({ status: "inactive", updatedAt: sql`now()` })
-      .where(
-        and(
-          eq(agentRelationships.sourceAgentId, agentId),
-          eq(agentRelationships.targetAgentId, targetAgentId),
-          eq(agentRelationships.relationshipType, "follow"),
-        ),
-      );
+    const sql = c.get("sql");
+    await sql`
+      UPDATE agent_relationships
+      SET status = 'inactive', updated_at = now()
+      WHERE source_agent_id = ${agentId}
+        AND target_agent_id = ${targetAgentId}
+        AND relationship_type = 'follow'
+    `;
 
     return c.json({ success: true });
   },
@@ -520,23 +500,21 @@ agentsRoutes.post(
       return forbidden(c, "You can only manage relationships for your own agent");
     }
 
-    const db = c.get("db");
-    const targetAgent = await firstRow(db
-      .select({ id: agents.id })
-      .from(agents)
-      .where(eq(agents.id, targetAgentId))
-    );
+    const sql = c.get("sql");
+    const targetAgent = await firstRow(sql`
+      SELECT id FROM agents WHERE id = ${targetAgentId}
+    `);
     if (!targetAgent) {
       return notFound(c, "Target agent not found");
     }
 
-    await db.execute(sql`
+    await sql`
       INSERT INTO agent_relationships (
         id, source_agent_id, target_agent_id, relationship_type, status, created_at, updated_at
       ) VALUES (${crypto.randomUUID()}, ${agentId}, ${targetAgentId}, 'subscribe', 'active', now(), now())
       ON CONFLICT(source_agent_id, target_agent_id, relationship_type)
       DO UPDATE SET status = 'active', updated_at = now()
-    `);
+    `;
 
     return c.json({ success: true });
   },
@@ -554,17 +532,14 @@ agentsRoutes.delete(
       return forbidden(c, "You can only manage relationships for your own agent");
     }
 
-    const db = c.get("db");
-    await db
-      .update(agentRelationships)
-      .set({ status: "inactive", updatedAt: sql`now()` })
-      .where(
-        and(
-          eq(agentRelationships.sourceAgentId, agentId),
-          eq(agentRelationships.targetAgentId, targetAgentId),
-          eq(agentRelationships.relationshipType, "subscribe"),
-        ),
-      );
+    const sql = c.get("sql");
+    await sql`
+      UPDATE agent_relationships
+      SET status = 'inactive', updated_at = now()
+      WHERE source_agent_id = ${agentId}
+        AND target_agent_id = ${targetAgentId}
+        AND relationship_type = 'subscribe'
+    `;
 
     return c.json({ success: true });
   },
@@ -595,22 +570,20 @@ agentsRoutes.post("/:agentId/skills", requireAuth, async (c) => {
   const parsed = equipSkillSchema.safeParse(body);
   if (!parsed.success) return badRequest(c, "Invalid equip payload");
 
-  const db = c.get("db");
-  const skill = await firstRow(db
-    .select({ id: skills.id })
-    .from(skills)
-    .where(and(eq(skills.id, parsed.data.skill_id), eq(skills.enabled, true)))
-  );
+  const sql = c.get("sql");
+  const skill = await firstRow(sql`
+    SELECT id FROM skills WHERE id = ${parsed.data.skill_id} AND enabled = true
+  `);
   if (!skill) return notFound(c, "Skill not found");
 
   const configOverrides = parsed.data.config_overrides ?? null;
 
-  await db.execute(sql`
+  await sql`
     INSERT INTO agent_skills (agent_id, skill_id, config_overrides_json, enabled, equipped_at)
     VALUES (${ownedAgent.id}, ${parsed.data.skill_id}, ${configOverrides}, true, now())
     ON CONFLICT(agent_id, skill_id) DO UPDATE SET
       config_overrides_json = ${configOverrides}, enabled = true, equipped_at = now()
-  `);
+  `;
 
   return c.json({ success: true });
 });
@@ -618,41 +591,35 @@ agentsRoutes.post("/:agentId/skills", requireAuth, async (c) => {
 // List equipped skills
 agentsRoutes.get("/:agentId/skills", optionalAuth, async (c) => {
   const agentId = c.req.param("agentId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const agent = await firstRow(db
-    .select({ id: agents.id })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-  );
+  const agent = await firstRow(sql`
+    SELECT id FROM agents WHERE id = ${agentId}
+  `);
   if (!agent) return notFound(c, "Agent not found");
 
-  const rows = await db
-    .select({
-      skill_id: agentSkills.skillId,
-      config_overrides_json: agentSkills.configOverridesJson,
-      enabled: agentSkills.enabled,
-      equipped_at: agentSkills.equippedAt,
-      slug: skills.slug,
-      name: skills.name,
-      description: skills.description,
-      category: skills.category,
-      action_type: skills.actionType,
-      visibility: skills.visibility,
-    })
-    .from(agentSkills)
-    .innerJoin(skills, eq(skills.id, agentSkills.skillId))
-    .where(
-      and(
-        eq(agentSkills.agentId, agentId),
-        eq(agentSkills.enabled, true),
-        eq(skills.enabled, true),
-      ),
-    )
-    .orderBy(desc(agentSkills.equippedAt));
+  const rows = await sql`
+    SELECT
+      ask.skill_id,
+      ask.config_overrides_json,
+      ask.enabled,
+      ask.equipped_at,
+      s.slug,
+      s.name,
+      s.description,
+      s.category,
+      s.action_type,
+      s.visibility
+    FROM agent_skills ask
+    INNER JOIN skills s ON s.id = ask.skill_id
+    WHERE ask.agent_id = ${agentId}
+      AND ask.enabled = true
+      AND s.enabled = true
+    ORDER BY ask.equipped_at DESC
+  `;
 
   return c.json({
-    items: rows.map((r) => ({
+    items: rows.map((r: Record<string, unknown>) => ({
       skill_id: r.skill_id,
       slug: r.slug,
       name: r.name,
@@ -672,16 +639,13 @@ agentsRoutes.delete("/:agentId/skills/:skillId", requireAuth, async (c) => {
   const ownedAgent = await ensureOwnedAgent(c, c.req.param("agentId"));
   if (!ownedAgent) return forbidden(c, "You can only manage skills for your own agent");
 
-  const db = c.get("db");
-  await db
-    .update(agentSkills)
-    .set({ enabled: false })
-    .where(
-      and(
-        eq(agentSkills.agentId, ownedAgent.id),
-        eq(agentSkills.skillId, c.req.param("skillId")),
-      ),
-    );
+  const sql = c.get("sql");
+  await sql`
+    UPDATE agent_skills
+    SET enabled = false
+    WHERE agent_id = ${ownedAgent.id}
+      AND skill_id = ${c.req.param("skillId")}
+  `;
 
   return c.json({ success: true });
 });
@@ -695,27 +659,29 @@ agentsRoutes.patch("/:agentId/skills/:skillId", requireAuth, async (c) => {
   const parsed = patchEquipSchema.safeParse(body);
   if (!parsed.success) return badRequest(c, "Invalid update payload");
 
-  const updates: Partial<typeof agentSkills.$inferInsert> = {};
+  const hasUpdates =
+    parsed.data.config_overrides !== undefined ||
+    parsed.data.enabled !== undefined;
 
-  if (parsed.data.config_overrides !== undefined) {
-    updates.configOverridesJson = parsed.data.config_overrides;
-  }
-  if (parsed.data.enabled !== undefined) {
-    updates.enabled = parsed.data.enabled;
-  }
+  if (!hasUpdates) return badRequest(c, "No fields to update");
 
-  if (Object.keys(updates).length === 0) return badRequest(c, "No fields to update");
-
-  const db = c.get("db");
-  await db
-    .update(agentSkills)
-    .set(updates)
-    .where(
-      and(
-        eq(agentSkills.agentId, ownedAgent.id),
-        eq(agentSkills.skillId, c.req.param("skillId")),
-      ),
-    );
+  const sql = c.get("sql");
+  await sql`
+    UPDATE agent_skills SET
+      ${
+        parsed.data.config_overrides !== undefined
+          ? sql`config_overrides_json = ${parsed.data.config_overrides},`
+          : sql``
+      }
+      ${
+        parsed.data.enabled !== undefined
+          ? sql`enabled = ${parsed.data.enabled},`
+          : sql``
+      }
+      agent_id = agent_id
+    WHERE agent_id = ${ownedAgent.id}
+      AND skill_id = ${c.req.param("skillId")}
+  `;
 
   return c.json({ success: true });
 });
@@ -726,32 +692,30 @@ agentsRoutes.post("/:agentId/skills/:skillId/execute", requireAuth, async (c) =>
   if (!ownedAgent) return forbidden(c, "You can only execute skills for your own agent");
 
   const skillId = c.req.param("skillId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const equipped = await firstRow(db
-    .select({ skill_id: agentSkills.skillId })
-    .from(agentSkills)
-    .where(
-      and(
-        eq(agentSkills.agentId, ownedAgent.id),
-        eq(agentSkills.skillId, skillId),
-        eq(agentSkills.enabled, true),
-      ),
-    )
-  );
+  const equipped = await firstRow(sql`
+    SELECT skill_id FROM agent_skills
+    WHERE agent_id = ${ownedAgent.id}
+      AND skill_id = ${skillId}
+      AND enabled = true
+  `);
 
   if (!equipped) return badRequest(c, "Skill is not equipped on this agent");
 
-  const rateLimited = await checkRateLimit(db, ownedAgent.id);
+  const rateLimited = await checkRateLimit(sql, ownedAgent.id);
   if (rateLimited) {
     return c.json({ error: "Rate limit exceeded: 60 executions per hour" }, 429);
   }
 
-  const skill = await firstRow(db
-    .select()
-    .from(skills)
-    .where(and(eq(skills.id, skillId), eq(skills.enabled, true)))
-  );
+  const skill = await firstRow(sql`
+    SELECT
+      id, slug, name, description, category,
+      input_schema, output_schema, action_type, action_config,
+      visibility, creator_agent_id, enabled, created_at, updated_at
+    FROM skills
+    WHERE id = ${skillId} AND enabled = true
+  `) as Record<string, unknown> | undefined;
 
   if (!skill) return notFound(c, "Skill not found");
 
@@ -759,25 +723,25 @@ agentsRoutes.post("/:agentId/skills/:skillId/execute", requireAuth, async (c) =>
   const parsed = executeSkillSchema.safeParse(body ?? {});
   const input = parsed.success ? (parsed.data.input ?? {}) : {};
 
-  // Map Drizzle row to SkillDefinition format
+  // Map row to SkillDefinition format
   const skillDef: SkillDefinition = {
-    id: skill.id,
-    slug: skill.slug,
-    name: skill.name,
-    description: skill.description ?? "",
-    category: skill.category,
-    input_schema: skill.inputSchema ?? {},
-    output_schema: skill.outputSchema ?? {},
-    action_type: skill.actionType,
-    action_config: skill.actionConfig ?? {},
-    visibility: skill.visibility ?? "public",
-    creator_agent_id: skill.creatorAgentId ?? null,
+    id: skill.id as string,
+    slug: skill.slug as string,
+    name: skill.name as string,
+    description: (skill.description as string) ?? "",
+    category: skill.category as SkillDefinition["category"],
+    input_schema: (skill.input_schema as Record<string, unknown>) ?? {},
+    output_schema: (skill.output_schema as Record<string, unknown>) ?? {},
+    action_type: skill.action_type as SkillDefinition["action_type"],
+    action_config: (skill.action_config as SkillDefinition["action_config"]) ?? {},
+    visibility: (skill.visibility as "public" | "private") ?? "public",
+    creator_agent_id: (skill.creator_agent_id as string) ?? null,
     enabled: skill.enabled ? 1 : 0,
-    created_at: skill.createdAt.toISOString(),
-    updated_at: skill.updatedAt.toISOString(),
+    created_at: new Date(skill.created_at as string).toISOString(),
+    updated_at: new Date(skill.updated_at as string).toISOString(),
   };
 
-  const result = await executeSkill(c.env, ownedAgent.id, skillDef, input as Record<string, unknown>);
+  const result = await executeSkill(sql, c.env, ownedAgent.id, skillDef, input as Record<string, unknown>);
 
   return c.json({ result });
 });
@@ -787,46 +751,32 @@ agentsRoutes.get("/:agentId/skills/logs", requireAuth, async (c) => {
   const ownedAgent = await ensureOwnedAgent(c, c.req.param("agentId"));
   if (!ownedAgent) return forbidden(c, "You can only view logs for your own agent");
 
-  const db = c.get("db");
-  const rows = await db
-    .select({
-      id: skillExecutionLogs.id,
-      skill_id: skillExecutionLogs.skillId,
-      status: skillExecutionLogs.status,
-      input_json: skillExecutionLogs.inputJson,
-      output_json: skillExecutionLogs.outputJson,
-      duration_ms: skillExecutionLogs.durationMs,
-      error_message: skillExecutionLogs.errorMessage,
-      created_at: skillExecutionLogs.createdAt,
-    })
-    .from(skillExecutionLogs)
-    .where(eq(skillExecutionLogs.agentId, ownedAgent.id))
-    .orderBy(desc(skillExecutionLogs.createdAt))
-    .limit(50);
+  const sql = c.get("sql");
+  const rows = await sql`
+    SELECT
+      id, skill_id, status, input_json, output_json,
+      duration_ms, error_message, created_at
+    FROM skill_execution_logs
+    WHERE agent_id = ${ownedAgent.id}
+    ORDER BY created_at DESC
+    LIMIT 50
+  `;
 
   return c.json({ items: rows });
 });
 
 agentsRoutes.get("/:agentId/stats", async (c) => {
   const agentId = c.req.param("agentId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const agent = await firstRow(db
-    .select({ id: agents.id })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-  );
+  const agent = await firstRow(sql`
+    SELECT id FROM agents WHERE id = ${agentId}
+  `);
   if (!agent) {
     return notFound(c, "Agent not found");
   }
 
-  const stats = await db.execute<{
-    followers_count: number;
-    subscribers_count: number;
-    posts_count: number;
-    agent_followers_count: number;
-    agent_subscribers_count: number;
-  }>(sql`
+  const rows = await sql`
     SELECT
       (SELECT COUNT(*) FROM follows WHERE agent_id = ${agentId}) AS followers_count,
       (SELECT COUNT(*) FROM subscriptions WHERE agent_id = ${agentId} AND status = 'active') AS subscribers_count,
@@ -843,17 +793,17 @@ agentsRoutes.get("/:agentId/stats", async (c) => {
           AND relationship_type = 'subscribe'
           AND status = 'active'
       ) AS agent_subscribers_count
-  `);
+  `;
 
-  const row = stats.rows[0];
+  const row = rows[0] as Record<string, unknown> | undefined;
 
   return c.json({
     stats: {
-      followersCount: row?.followers_count ?? 0,
-      subscribersCount: row?.subscribers_count ?? 0,
-      postsCount: row?.posts_count ?? 0,
-      agentFollowersCount: row?.agent_followers_count ?? 0,
-      agentSubscribersCount: row?.agent_subscribers_count ?? 0,
+      followersCount: Number(row?.followers_count ?? 0),
+      subscribersCount: Number(row?.subscribers_count ?? 0),
+      postsCount: Number(row?.posts_count ?? 0),
+      agentFollowersCount: Number(row?.agent_followers_count ?? 0),
+      agentSubscribersCount: Number(row?.agent_subscribers_count ?? 0),
     },
   });
 });
@@ -861,13 +811,11 @@ agentsRoutes.get("/:agentId/stats", async (c) => {
 agentsRoutes.get("/:agentId/posts", optionalAuth, async (c) => {
   const authUser = c.get("authUser");
   const agentId = c.req.param("agentId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const owner = await firstRow(db
-    .select({ owner_user_id: agents.ownerUserId })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-  );
+  const owner = await firstRow(sql`
+    SELECT owner_user_id FROM agents WHERE id = ${agentId}
+  `) as Record<string, unknown> | undefined;
   if (!owner) {
     return notFound(c, "Agent not found");
   }
@@ -877,45 +825,30 @@ agentsRoutes.get("/:agentId/posts", optionalAuth, async (c) => {
     if (authUser.role === "admin" || authUser.id === owner.owner_user_id) {
       canSeeSubscriberPosts = true;
     } else {
-      const subscription = await firstRow(db
-        .select({ id: subscriptions.id })
-        .from(subscriptions)
-        .where(
-          and(
-            eq(subscriptions.userId, authUser.id),
-            eq(subscriptions.agentId, agentId),
-            eq(subscriptions.status, "active"),
-          ),
-        )
-      );
+      const subscription = await firstRow(sql`
+        SELECT id FROM subscriptions
+        WHERE user_id = ${authUser.id}
+          AND agent_id = ${agentId}
+          AND status = 'active'
+      `);
       canSeeSubscriberPosts = Boolean(subscription);
     }
   }
 
-  const visibilityFilter = canSeeSubscriberPosts
-    ? or(eq(posts.visibility, "public"), eq(posts.visibility, "subscriber"))
-    : eq(posts.visibility, "public");
+  const visibilityCondition = canSeeSubscriberPosts
+    ? sql`p.visibility IN ('public', 'subscriber')`
+    : sql`p.visibility = 'public'`;
 
-  const postsResult = await db
-    .select({
-      id: posts.id,
-      body_text: posts.bodyText,
-      media_type: posts.mediaType,
-      media_url: posts.mediaUrl,
-      visibility: posts.visibility,
-      ai_generated: posts.aiGenerated,
-      created_at: posts.createdAt,
-    })
-    .from(posts)
-    .where(
-      and(
-        eq(posts.agentId, agentId),
-        sql`${posts.deletedAt} IS NULL`,
-        visibilityFilter,
-      ),
-    )
-    .orderBy(desc(posts.createdAt))
-    .limit(50);
+  const postsResult = await sql`
+    SELECT
+      id, body_text, media_type, media_url, visibility, ai_generated, created_at
+    FROM posts p
+    WHERE p.agent_id = ${agentId}
+      AND p.deleted_at IS NULL
+      AND ${visibilityCondition}
+    ORDER BY p.created_at DESC
+    LIMIT 50
+  `;
 
   return c.json({ items: postsResult });
 });
@@ -923,26 +856,16 @@ agentsRoutes.get("/:agentId/posts", optionalAuth, async (c) => {
 agentsRoutes.get("/:slug", optionalAuth, async (c) => {
   const slug = c.req.param("slug");
   const authUser = c.get("authUser");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const agent = await firstRow(db
-    .select({
-      id: agents.id,
-      owner_user_id: agents.ownerUserId,
-      name: agents.name,
-      slug: agents.slug,
-      bio: agents.bio,
-      personality_tags_json: agents.personalityTagsJson,
-      skills_json: agents.skillsJson,
-      cli_tools_json: agents.cliToolsJson,
-      avatar_url: agents.avatarUrl,
-      banner_url: agents.bannerUrl,
-      socials_json: agents.socialsJson,
-      created_at: agents.createdAt,
-    })
-    .from(agents)
-    .where(eq(agents.slug, slug))
-  );
+  const agent = await firstRow(sql`
+    SELECT
+      id, owner_user_id, name, slug, bio,
+      personality_tags_json, skills_json, cli_tools_json,
+      avatar_url, banner_url, socials_json, created_at
+    FROM agents
+    WHERE slug = ${slug}
+  `) as Record<string, unknown> | undefined;
 
   if (!agent) {
     return notFound(c, "Agent not found");
@@ -956,24 +879,16 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
       canSeeSubscriberPosts = true;
     } else {
       const [followRow, subscriptionRow] = await Promise.all([
-        firstRow(db
-          .select({ id: follows.id })
-          .from(follows)
-          .where(
-            and(eq(follows.userId, authUser.id), eq(follows.agentId, agent.id)),
-          )
-        ),
-        firstRow(db
-          .select({ id: subscriptions.id })
-          .from(subscriptions)
-          .where(
-            and(
-              eq(subscriptions.userId, authUser.id),
-              eq(subscriptions.agentId, agent.id),
-              eq(subscriptions.status, "active"),
-            ),
-          )
-        ),
+        firstRow(sql`
+          SELECT id FROM follows
+          WHERE user_id = ${authUser.id} AND agent_id = ${agent.id}
+        `),
+        firstRow(sql`
+          SELECT id FROM subscriptions
+          WHERE user_id = ${authUser.id}
+            AND agent_id = ${agent.id}
+            AND status = 'active'
+        `),
       ]);
       isFollowed = Boolean(followRow);
       isSubscribed = Boolean(subscriptionRow);
@@ -981,21 +896,11 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
     }
   }
 
-  const visibilityFilter = canSeeSubscriberPosts
-    ? or(eq(posts.visibility, "public"), eq(posts.visibility, "subscriber"))
-    : eq(posts.visibility, "public");
+  const visibilityCondition = canSeeSubscriberPosts
+    ? sql`p.visibility IN ('public', 'subscriber')`
+    : sql`p.visibility = 'public'`;
 
-  const postsResult = await db.execute<{
-    id: string;
-    body_text: string;
-    media_type: "image" | "video" | "none";
-    media_url: string | null;
-    visibility: "public" | "subscriber";
-    ai_generated: boolean;
-    created_at: string;
-    likes_count: number;
-    comments_count: number;
-  }>(sql`
+  const postsResult = await sql`
     SELECT
       p.id,
       p.body_text,
@@ -1009,30 +914,26 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
      FROM posts p
      WHERE p.agent_id = ${agent.id}
        AND p.deleted_at IS NULL
-       AND ${canSeeSubscriberPosts ? sql`p.visibility IN ('public', 'subscriber')` : sql`p.visibility = 'public'`}
+       AND ${visibilityCondition}
      ORDER BY p.created_at DESC
      LIMIT 25
-  `);
+  `;
 
-  const equippedSkills = await db
-    .select({
-      id: skills.id,
-      slug: skills.slug,
-      name: skills.name,
-      description: skills.description,
-      category: skills.category,
-      action_type: skills.actionType,
-    })
-    .from(agentSkills)
-    .innerJoin(skills, eq(skills.id, agentSkills.skillId))
-    .where(
-      and(
-        eq(agentSkills.agentId, agent.id),
-        eq(agentSkills.enabled, true),
-        eq(skills.enabled, true),
-      ),
-    )
-    .orderBy(desc(agentSkills.equippedAt));
+  const equippedSkills = await sql`
+    SELECT
+      s.id,
+      s.slug,
+      s.name,
+      s.description,
+      s.category,
+      s.action_type
+    FROM agent_skills ask
+    INNER JOIN skills s ON s.id = ask.skill_id
+    WHERE ask.agent_id = ${agent.id}
+      AND ask.enabled = true
+      AND s.enabled = true
+    ORDER BY ask.equipped_at DESC
+  `;
 
   return c.json({
     agent: {
@@ -1052,6 +953,6 @@ agentsRoutes.get("/:slug", optionalAuth, async (c) => {
       isFollowed,
       isSubscribed,
     },
-    posts: postsResult.rows,
+    posts: postsResult,
   });
 });

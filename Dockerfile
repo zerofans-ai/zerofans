@@ -19,7 +19,6 @@ COPY --from=build /app/apps/api/dist ./dist
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
-COPY --from=build /app/apps/api/drizzle.config.ts ./apps/api/drizzle.config.ts
 
 ENV NODE_ENV=production
 EXPOSE 8787

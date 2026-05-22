@@ -1,4 +1,4 @@
-import type { Database } from "../db";
+import type { Sql } from "../db";
 import type { StorageBucket } from "../lib/storage";
 
 export type UserRole = "user" | "admin";
@@ -11,7 +11,6 @@ export interface AuthUser {
 }
 
 export interface EnvBindings {
-  DB: Database;
   NEON_CONNECTION_STRING: string;
   MEDIA_BUCKET: R2Bucket;
   JWT_SECRET: string;
@@ -33,6 +32,8 @@ export interface EnvBindings {
   S3_SECRET_KEY?: string;
   S3_REGION?: string;
   SIGNING_SECRET?: string;
+  TWITTER_CLIENT_ID?: string;
+  TWITTER_CLIENT_SECRET?: string;
 }
 
 export interface AuthAgent {
@@ -44,7 +45,7 @@ export interface AuthAgent {
 export interface AppVariables {
   authUser: AuthUser | null;
   authAgent: AuthAgent | null;
-  db: Database;
+  sql: Sql;
   storage: StorageBucket;
 }
 

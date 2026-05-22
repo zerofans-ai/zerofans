@@ -1,20 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { eq, sql, and, isNull } from "drizzle-orm";
 import { badRequest, notFound, unauthorized } from "../lib/http";
 import { firstRow } from "../db";
 import { hashContent } from "../lib/signing";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
-import {
-  agents,
-  posts,
-  comments,
-  likes,
-  follows,
-  subscriptions,
-  users,
-} from "../db/schema";
 
 const commentSchema = z.object({
   bodyText: z.string().min(1).max(600),
@@ -34,25 +24,21 @@ engagementRoutes.post("/follows/:agentId", requireAuth, async (c) => {
   }
 
   const agentId = c.req.param("agentId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const agent = await firstRow(db
-    .select({ id: agents.id })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-  );
+  const agent = await firstRow(sql`
+    SELECT id FROM agents WHERE id = ${agentId}
+  `);
   if (!agent) {
     return notFound(c, "Agent not found");
   }
 
-  await db
-    .insert(follows)
-    .values({
-      id: crypto.randomUUID(),
-      userId: authUser.id,
-      agentId,
-    })
-    .onConflictDoNothing();
+  const id = crypto.randomUUID();
+  await sql`
+    INSERT INTO follows (id, user_id, agent_id)
+    VALUES (${id}, ${authUser.id}, ${agentId})
+    ON CONFLICT DO NOTHING
+  `;
 
   return c.json({ success: true });
 });
@@ -63,10 +49,10 @@ engagementRoutes.delete("/follows/:agentId", requireAuth, async (c) => {
     return unauthorized(c);
   }
 
-  const db = c.get("db");
-  await db
-    .delete(follows)
-    .where(and(eq(follows.userId, authUser.id), eq(follows.agentId, c.req.param("agentId"))));
+  const sql = c.get("sql");
+  await sql`
+    DELETE FROM follows WHERE user_id = ${authUser.id} AND agent_id = ${c.req.param("agentId")}
+  `;
 
   return c.json({ success: true });
 });
@@ -78,37 +64,24 @@ engagementRoutes.post("/subscriptions/:agentId", requireAuth, async (c) => {
   }
 
   const agentId = c.req.param("agentId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const agent = await firstRow(db
-    .select({ id: agents.id })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-  );
+  const agent = await firstRow(sql`
+    SELECT id FROM agents WHERE id = ${agentId}
+  `);
   if (!agent) {
     return notFound(c, "Agent not found");
   }
 
-  const periodEnd = sql`now() + interval '30 days'`;
-
-  await db
-    .insert(subscriptions)
-    .values({
-      id: crypto.randomUUID(),
-      userId: authUser.id,
-      agentId,
-      status: "active",
-      planType: "basic",
-      currentPeriodEnd: periodEnd,
-    })
-    .onConflictDoUpdate({
-      target: [subscriptions.userId, subscriptions.agentId],
-      set: {
-        status: "active",
-        currentPeriodEnd: periodEnd,
-        updatedAt: sql`now()`,
-      },
-    });
+  const id = crypto.randomUUID();
+  await sql`
+    INSERT INTO subscriptions (id, user_id, agent_id, status, plan_type, current_period_end)
+    VALUES (${id}, ${authUser.id}, ${agentId}, 'active', 'basic', now() + interval '30 days')
+    ON CONFLICT (user_id, agent_id) DO UPDATE SET
+      status = 'active',
+      current_period_end = now() + interval '30 days',
+      updated_at = now()
+  `;
 
   return c.json({ success: true });
 });
@@ -119,15 +92,10 @@ engagementRoutes.delete("/subscriptions/:agentId", requireAuth, async (c) => {
     return unauthorized(c);
   }
 
-  const db = c.get("db");
-  await db
-    .delete(subscriptions)
-    .where(
-      and(
-        eq(subscriptions.userId, authUser.id),
-        eq(subscriptions.agentId, c.req.param("agentId")),
-      ),
-    );
+  const sql = c.get("sql");
+  await sql`
+    DELETE FROM subscriptions WHERE user_id = ${authUser.id} AND agent_id = ${c.req.param("agentId")}
+  `;
 
   return c.json({ success: true });
 });
@@ -142,28 +110,23 @@ engagementRoutes.post("/posts/:postId/likes", requireAuth, async (c) => {
   }
 
   const postId = c.req.param("postId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const post = await firstRow(db
-    .select({ id: posts.id })
-    .from(posts)
-    .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
-  );
+  const post = await firstRow(sql`
+    SELECT id FROM posts WHERE id = ${postId} AND deleted_at IS NULL
+  `);
   if (!post) {
     return notFound(c, "Post not found");
   }
 
   // Agent token auth — like as the agent directly
   if (authAgent) {
-    await db
-      .insert(likes)
-      .values({
-        id: crypto.randomUUID(),
-        postId,
-        userId: null,
-        agentId: authAgent.agentId,
-      })
-      .onConflictDoNothing();
+    const id = crypto.randomUUID();
+    await sql`
+      INSERT INTO likes (id, post_id, user_id, agent_id)
+      VALUES (${id}, ${postId}, NULL, ${authAgent.agentId})
+      ON CONFLICT DO NOTHING
+    `;
     return c.json({ success: true });
   }
 
@@ -173,34 +136,26 @@ engagementRoutes.post("/posts/:postId/likes", requireAuth, async (c) => {
   const agentId = parsed.success ? parsed.data.agentId : undefined;
 
   if (agentId) {
-    const agent = await firstRow(db
-      .select({ id: agents.id, ownerUserId: agents.ownerUserId })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-    );
-    if (!agent || agent.ownerUserId !== authUser!.id) {
+    const agent = await firstRow(sql`
+      SELECT id, owner_user_id FROM agents WHERE id = ${agentId}
+    `);
+    if (!agent || agent.owner_user_id !== authUser!.id) {
       return badRequest(c, "You can only like as your own agent");
     }
 
-    await db
-      .insert(likes)
-      .values({
-        id: crypto.randomUUID(),
-        postId,
-        userId: null,
-        agentId,
-      })
-      .onConflictDoNothing();
+    const id = crypto.randomUUID();
+    await sql`
+      INSERT INTO likes (id, post_id, user_id, agent_id)
+      VALUES (${id}, ${postId}, NULL, ${agentId})
+      ON CONFLICT DO NOTHING
+    `;
   } else {
-    await db
-      .insert(likes)
-      .values({
-        id: crypto.randomUUID(),
-        postId,
-        userId: authUser!.id,
-        agentId: null,
-      })
-      .onConflictDoNothing();
+    const id = crypto.randomUUID();
+    await sql`
+      INSERT INTO likes (id, post_id, user_id, agent_id)
+      VALUES (${id}, ${postId}, ${authUser!.id}, NULL)
+      ON CONFLICT DO NOTHING
+    `;
   }
 
   return c.json({ success: true });
@@ -216,26 +171,24 @@ engagementRoutes.delete("/posts/:postId/likes", requireAuth, async (c) => {
   const postId = c.req.param("postId");
   const agentId = c.req.query("agentId");
 
-  const db = c.get("db");
+  const sql = c.get("sql");
 
   if (agentId) {
     // Verify ownership
-    const agent = await firstRow(db
-      .select({ id: agents.id, ownerUserId: agents.ownerUserId })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-    );
-    if (!agent || agent.ownerUserId !== authUser.id) {
+    const agent = await firstRow(sql`
+      SELECT id, owner_user_id FROM agents WHERE id = ${agentId}
+    `);
+    if (!agent || agent.owner_user_id !== authUser.id) {
       return badRequest(c, "You can only unlike as your own agent");
     }
 
-    await db
-      .delete(likes)
-      .where(and(eq(likes.postId, postId), eq(likes.agentId, agentId)));
+    await sql`
+      DELETE FROM likes WHERE post_id = ${postId} AND agent_id = ${agentId}
+    `;
   } else {
-    await db
-      .delete(likes)
-      .where(and(eq(likes.postId, postId), eq(likes.userId, authUser.id)));
+    await sql`
+      DELETE FROM likes WHERE post_id = ${postId} AND user_id = ${authUser.id}
+    `;
   }
 
   return c.json({ success: true });
@@ -244,9 +197,9 @@ engagementRoutes.delete("/posts/:postId/likes", requireAuth, async (c) => {
 // Get comments for a post (supports agent-authored comments)
 engagementRoutes.get("/posts/:postId/comments", async (c) => {
   const postId = c.req.param("postId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const rows = await db.execute(sql`
+  const rows = await sql`
     SELECT
       c.id,
       c.body_text,
@@ -263,10 +216,10 @@ engagementRoutes.get("/posts/:postId/comments", async (c) => {
     LEFT JOIN agents a ON a.id = c.agent_id
     WHERE c.post_id = ${postId}
     ORDER BY c.created_at ASC
-  `);
+  `;
 
   return c.json({
-    items: rows.rows.map((row: Record<string, unknown>) => ({
+    items: rows.map((row: Record<string, unknown>) => ({
       id: row.id,
       bodyText: row.body_text,
       createdAt: row.created_at,
@@ -295,14 +248,12 @@ engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
     return badRequest(c, "Invalid comment payload");
   }
 
-  const db = c.get("db");
+  const sql = c.get("sql");
   const postId = c.req.param("postId");
 
-  const post = await firstRow(db
-    .select({ id: posts.id })
-    .from(posts)
-    .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
-  );
+  const post = await firstRow(sql`
+    SELECT id FROM posts WHERE id = ${postId} AND deleted_at IS NULL
+  `);
   if (!post) {
     return notFound(c, "Post not found");
   }
@@ -314,46 +265,35 @@ engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
 
   // Agent token auth — comment as the agent directly
   if (authAgent) {
-    await db.insert(comments).values({
-      id: crypto.randomUUID(),
-      postId,
-      userId: null,
-      agentId: authAgent.agentId,
-      bodyText,
-      contentHash,
-    });
+    const id = crypto.randomUUID();
+    await sql`
+      INSERT INTO comments (id, post_id, user_id, agent_id, body_text, content_hash)
+      VALUES (${id}, ${postId}, NULL, ${authAgent.agentId}, ${bodyText}, ${contentHash})
+    `;
     return c.json({ success: true });
   }
 
   const agentId = parsed.data.agentId;
 
   if (agentId) {
-    const agent = await firstRow(db
-      .select({ id: agents.id, ownerUserId: agents.ownerUserId })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-    );
-    if (!agent || agent.ownerUserId !== authUser!.id) {
+    const agent = await firstRow(sql`
+      SELECT id, owner_user_id FROM agents WHERE id = ${agentId}
+    `);
+    if (!agent || agent.owner_user_id !== authUser!.id) {
       return badRequest(c, "You can only comment as your own agent");
     }
 
-    await db.insert(comments).values({
-      id: crypto.randomUUID(),
-      postId,
-      userId: null,
-      agentId,
-      bodyText,
-      contentHash,
-    });
+    const id = crypto.randomUUID();
+    await sql`
+      INSERT INTO comments (id, post_id, user_id, agent_id, body_text, content_hash)
+      VALUES (${id}, ${postId}, NULL, ${agentId}, ${bodyText}, ${contentHash})
+    `;
   } else {
-    await db.insert(comments).values({
-      id: crypto.randomUUID(),
-      postId,
-      userId: authUser!.id,
-      agentId: null,
-      bodyText,
-      contentHash,
-    });
+    const id = crypto.randomUUID();
+    await sql`
+      INSERT INTO comments (id, post_id, user_id, agent_id, body_text, content_hash)
+      VALUES (${id}, ${postId}, ${authUser!.id}, NULL, ${bodyText}, ${contentHash})
+    `;
   }
 
   return c.json({ success: true });

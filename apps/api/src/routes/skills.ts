@@ -1,13 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { eq, sql, and } from "drizzle-orm";
 import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
-import type { Database } from "../db"
 import { firstRow } from "../db";
 import type { SkillDefinition } from "../types/skills";
-import { agents, skills } from "../db/schema";
 
 const skillCategoryEnum = z.enum([
   "content",
@@ -65,17 +62,15 @@ function toSlug(input: string): string {
     .replace(/^-|-$/g, "");
 }
 
-async function makeUniqueSkillSlug(baseName: string, db: Database): Promise<string> {
+async function makeUniqueSkillSlug(baseName: string, sql: import("../db").Sql): Promise<string> {
   const baseSlug = toSlug(baseName) || "skill";
   let candidate = baseSlug;
   let attempts = 0;
 
   while (attempts < 8) {
-    const existing = await firstRow(db
-      .select({ id: skills.id })
-      .from(skills)
-      .where(eq(skills.slug, candidate))
-    );
+    const existing = await firstRow(sql`
+      SELECT id FROM skills WHERE slug = ${candidate}
+    `);
 
     if (!existing) return candidate;
     attempts += 1;
@@ -92,28 +87,16 @@ function formatSkill(row: Record<string, unknown>): Record<string, unknown> {
     name: row.name,
     description: row.description,
     category: row.category,
-    input_schema: safeParseJson(row.input_schema),
-    output_schema: safeParseJson(row.output_schema),
+    input_schema: row.input_schema,
+    output_schema: row.output_schema,
     action_type: row.action_type,
-    action_config: safeParseJson(row.action_config),
+    action_config: row.action_config,
     visibility: row.visibility,
     creator_agent_id: row.creator_agent_id,
     enabled: row.enabled,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
-}
-
-function safeParseJson(val: unknown): unknown {
-  if (val && typeof val === "object") return val;
-  if (typeof val === "string") {
-    try {
-      return JSON.parse(val);
-    } catch {
-      return {};
-    }
-  }
-  return {};
 }
 
 export const skillsRoutes = new Hono<AppEnv>();
@@ -127,52 +110,49 @@ skillsRoutes.post("/", requireAuth, async (c) => {
   const parsed = createSkillSchema.safeParse(body);
   if (!parsed.success) return badRequest(c, "Invalid skill payload");
 
-  const db = c.get("db");
+  const sql = c.get("sql");
 
   if (parsed.data.creator_agent_id) {
-    const agent = await firstRow(db
-      .select({ id: agents.id, ownerUserId: agents.ownerUserId })
-      .from(agents)
-      .where(eq(agents.id, parsed.data.creator_agent_id))
-    );
+    const agent = await firstRow(sql`
+      SELECT id, owner_user_id FROM agents WHERE id = ${parsed.data.creator_agent_id}
+    `);
 
     if (!agent) return notFound(c, "Creator agent not found");
-    if (agent.ownerUserId !== authUser.id && authUser.role !== "admin") {
+    if (agent.owner_user_id !== authUser.id && authUser.role !== "admin") {
       return forbidden(c, "You can only create skills for your own agents");
     }
   }
 
   const id = crypto.randomUUID();
-  const slug = await makeUniqueSkillSlug(parsed.data.name, db);
+  const slug = await makeUniqueSkillSlug(parsed.data.name, sql);
+  const name = parsed.data.name.trim();
+  const description = parsed.data.description ?? "";
+  const category = parsed.data.category;
+  const inputSchema = parsed.data.input_schema ?? {};
+  const outputSchema = parsed.data.output_schema ?? {};
+  const actionType = parsed.data.action_type;
+  const actionConfig = parsed.data.action_config ?? {};
+  const visibility = parsed.data.visibility ?? "public";
+  const creatorAgentId = parsed.data.creator_agent_id ?? null;
 
-  await db.insert(skills).values({
-    id,
-    slug,
-    name: parsed.data.name.trim(),
-    description: parsed.data.description ?? "",
-    category: parsed.data.category,
-    inputSchema: parsed.data.input_schema ?? {},
-    outputSchema: parsed.data.output_schema ?? {},
-    actionType: parsed.data.action_type,
-    actionConfig: parsed.data.action_config ?? {},
-    visibility: parsed.data.visibility ?? "public",
-    creatorAgentId: parsed.data.creator_agent_id ?? null,
-    enabled: true,
-  });
+  await sql`
+    INSERT INTO skills (id, slug, name, description, category, input_schema, output_schema, action_type, action_config, visibility, creator_agent_id, enabled)
+    VALUES (${id}, ${slug}, ${name}, ${description}, ${category}, ${inputSchema}, ${outputSchema}, ${actionType}, ${actionConfig}, ${visibility}, ${creatorAgentId}, true)
+  `;
 
   return c.json({
     skill: {
       id,
       slug,
-      name: parsed.data.name.trim(),
-      description: parsed.data.description ?? "",
-      category: parsed.data.category,
-      input_schema: parsed.data.input_schema ?? {},
-      output_schema: parsed.data.output_schema ?? {},
-      action_type: parsed.data.action_type,
-      action_config: parsed.data.action_config ?? {},
-      visibility: parsed.data.visibility ?? "public",
-      creator_agent_id: parsed.data.creator_agent_id ?? null,
+      name,
+      description,
+      category,
+      input_schema: inputSchema,
+      output_schema: outputSchema,
+      action_type: actionType,
+      action_config: actionConfig,
+      visibility,
+      creator_agent_id: creatorAgentId,
       enabled: true,
     },
   });
@@ -188,42 +168,68 @@ skillsRoutes.get("/discover", optionalAuth, async (c) => {
   if (!parsed.success) return badRequest(c, "Invalid query");
 
   const limit = parsed.data.limit ?? 24;
-  const query = `%${(parsed.data.q ?? "").trim().toLowerCase()}%`;
-  const db = c.get("db");
+  const searchTerm = (parsed.data.q ?? "").trim().toLowerCase();
+  const query = `%${searchTerm}%`;
+  const sql = c.get("sql");
 
-  let querySql = sql`SELECT * FROM skills WHERE enabled = true AND visibility = 'public'`;
+  let rows: Record<string, unknown>[];
 
-  const conditions: ReturnType<typeof sql>[] = [];
-
-  if (parsed.data.q) {
-    conditions.push(sql`AND (lower(name) LIKE ${query} OR lower(description) LIKE ${query})`);
+  if (parsed.data.q && parsed.data.category) {
+    rows = await sql`
+      SELECT * FROM (
+        SELECT * FROM skills
+        WHERE enabled = true AND visibility = 'public'
+          AND (lower(name) LIKE ${query} OR lower(description) LIKE ${query})
+          AND category = ${parsed.data.category}
+        ORDER BY created_at DESC
+        LIMIT ${limit}
+      ) sub
+    `;
+  } else if (parsed.data.q) {
+    rows = await sql`
+      SELECT * FROM (
+        SELECT * FROM skills
+        WHERE enabled = true AND visibility = 'public'
+          AND (lower(name) LIKE ${query} OR lower(description) LIKE ${query})
+        ORDER BY created_at DESC
+        LIMIT ${limit}
+      ) sub
+    `;
+  } else if (parsed.data.category) {
+    rows = await sql`
+      SELECT * FROM (
+        SELECT * FROM skills
+        WHERE enabled = true AND visibility = 'public'
+          AND category = ${parsed.data.category}
+        ORDER BY created_at DESC
+        LIMIT ${limit}
+      ) sub
+    `;
+  } else {
+    rows = await sql`
+      SELECT * FROM (
+        SELECT * FROM skills
+        WHERE enabled = true AND visibility = 'public'
+        ORDER BY created_at DESC
+        LIMIT ${limit}
+      ) sub
+    `;
   }
-
-  if (parsed.data.category) {
-    conditions.push(sql`AND category = ${parsed.data.category}`);
-  }
-
-  conditions.push(sql`ORDER BY created_at DESC LIMIT ${limit}`);
-
-  const fullSql = sql.join([querySql, ...conditions], sql` `);
-
-  const rows = await db.execute(fullSql);
 
   return c.json({
-    items: rows.rows.map((row) => formatSkill(row as Record<string, unknown>)),
+    items: rows.map((row) => formatSkill(row as Record<string, unknown>)),
   });
 });
 
 // Get skill by slug or id
 skillsRoutes.get("/:slugOrId", optionalAuth, async (c) => {
   const slugOrId = c.req.param("slugOrId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const row = await db.execute(sql`
+  const skill = await firstRow(sql`
     SELECT * FROM skills WHERE (slug = ${slugOrId} OR id = ${slugOrId}) AND enabled = true LIMIT 1
   `);
 
-  const skill = row.rows[0];
   if (!skill) return notFound(c, "Skill not found");
 
   return c.json({ skill: formatSkill(skill as Record<string, unknown>) });
@@ -238,62 +244,82 @@ skillsRoutes.patch("/:skillId", requireAuth, async (c) => {
   const parsed = patchSkillSchema.safeParse(body);
   if (!parsed.success) return badRequest(c, "Invalid update payload");
 
-  const db = c.get("db");
+  const sql = c.get("sql");
   const skillId = c.req.param("skillId");
 
-  const skillRow = await firstRow(db
-    .select()
-    .from(skills)
-    .where(eq(skills.id, skillId))
-  );
+  const skillRow = await firstRow(sql`
+    SELECT * FROM skills WHERE id = ${skillId}
+  `);
 
   if (!skillRow) return notFound(c, "Skill not found");
 
-  if (skillRow.creatorAgentId) {
-    const agent = await firstRow(db
-      .select({ ownerUserId: agents.ownerUserId })
-      .from(agents)
-      .where(eq(agents.id, skillRow.creatorAgentId))
-    );
+  if (skillRow.creator_agent_id) {
+    const agent = await firstRow(sql`
+      SELECT owner_user_id FROM agents WHERE id = ${skillRow.creator_agent_id}
+    `);
 
-    if (agent && agent.ownerUserId !== authUser.id && authUser.role !== "admin") {
+    if (agent && agent.owner_user_id !== authUser.id && authUser.role !== "admin") {
       return forbidden(c);
     }
   } else if (authUser.role !== "admin") {
     return forbidden(c, "Only admins can update built-in skills");
   }
 
-  const updates: Partial<typeof skills.$inferInsert> = {};
+  const data = parsed.data;
+  const hasUpdates =
+    data.name !== undefined ||
+    data.description !== undefined ||
+    data.category !== undefined ||
+    data.input_schema !== undefined ||
+    data.output_schema !== undefined ||
+    data.action_type !== undefined ||
+    data.action_config !== undefined ||
+    data.visibility !== undefined;
 
-  if (parsed.data.name !== undefined) {
-    updates.name = parsed.data.name.trim();
+  if (!hasUpdates) return badRequest(c, "No fields to update");
+
+  // Build dynamic SET clause using sql.query() with $1, $2 placeholders
+  const setClauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (data.name !== undefined) {
+    params.push(data.name.trim());
+    setClauses.push(`name = $${params.length}`);
   }
-  if (parsed.data.description !== undefined) {
-    updates.description = parsed.data.description;
+  if (data.description !== undefined) {
+    params.push(data.description);
+    setClauses.push(`description = $${params.length}`);
   }
-  if (parsed.data.category !== undefined) {
-    updates.category = parsed.data.category;
+  if (data.category !== undefined) {
+    params.push(data.category);
+    setClauses.push(`category = $${params.length}`);
   }
-  if (parsed.data.input_schema !== undefined) {
-    updates.inputSchema = parsed.data.input_schema;
+  if (data.input_schema !== undefined) {
+    params.push(JSON.stringify(data.input_schema));
+    setClauses.push(`input_schema = $${params.length}::jsonb`);
   }
-  if (parsed.data.output_schema !== undefined) {
-    updates.outputSchema = parsed.data.output_schema;
+  if (data.output_schema !== undefined) {
+    params.push(JSON.stringify(data.output_schema));
+    setClauses.push(`output_schema = $${params.length}::jsonb`);
   }
-  if (parsed.data.action_type !== undefined) {
-    updates.actionType = parsed.data.action_type;
+  if (data.action_type !== undefined) {
+    params.push(data.action_type);
+    setClauses.push(`action_type = $${params.length}`);
   }
-  if (parsed.data.action_config !== undefined) {
-    updates.actionConfig = parsed.data.action_config;
+  if (data.action_config !== undefined) {
+    params.push(JSON.stringify(data.action_config));
+    setClauses.push(`action_config = $${params.length}::jsonb`);
   }
-  if (parsed.data.visibility !== undefined) {
-    updates.visibility = parsed.data.visibility;
+  if (data.visibility !== undefined) {
+    params.push(data.visibility);
+    setClauses.push(`visibility = $${params.length}`);
   }
 
-  if (Object.keys(updates).length === 0) return badRequest(c, "No fields to update");
+  setClauses.push("updated_at = now()");
+  params.push(skillRow.id);
 
-  updates.updatedAt = sql`now()` as unknown as Date;
-  await db.update(skills).set(updates).where(eq(skills.id, skillRow.id));
+  const queryStr = `UPDATE skills SET ${setClauses.join(", ")} WHERE id = $${params.length}::uuid`;
+  await sql.query(queryStr, params);
 
   return c.json({ success: true });
 });
@@ -303,38 +329,30 @@ skillsRoutes.delete("/:skillId", requireAuth, async (c) => {
   const authUser = c.get("authUser");
   if (!authUser) return unauthorized(c);
 
-  const db = c.get("db");
+  const sql = c.get("sql");
   const skillId = c.req.param("skillId");
 
-  const skillRow = await firstRow(db
-    .select()
-    .from(skills)
-    .where(eq(skills.id, skillId))
-  );
+  const skillRow = await firstRow(sql`
+    SELECT * FROM skills WHERE id = ${skillId}
+  `);
 
   if (!skillRow) return notFound(c, "Skill not found");
 
-  if (skillRow.creatorAgentId) {
-    const agent = await firstRow(db
-      .select({ ownerUserId: agents.ownerUserId })
-      .from(agents)
-      .where(eq(agents.id, skillRow.creatorAgentId))
-    );
+  if (skillRow.creator_agent_id) {
+    const agent = await firstRow(sql`
+      SELECT owner_user_id FROM agents WHERE id = ${skillRow.creator_agent_id}
+    `);
 
-    if (agent && agent.ownerUserId !== authUser.id && authUser.role !== "admin") {
+    if (agent && agent.owner_user_id !== authUser.id && authUser.role !== "admin") {
       return forbidden(c);
     }
   } else if (authUser.role !== "admin") {
     return forbidden(c, "Only admins can delete built-in skills");
   }
 
-  await db
-    .update(skills)
-    .set({
-      enabled: false,
-      updatedAt: sql`now()`,
-    })
-    .where(eq(skills.id, skillRow.id));
+  await sql`
+    UPDATE skills SET enabled = false, updated_at = now() WHERE id = ${skillRow.id}
+  `;
 
   return c.json({ success: true });
 });

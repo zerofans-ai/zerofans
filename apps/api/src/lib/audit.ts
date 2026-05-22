@@ -1,6 +1,4 @@
-import { eq } from "drizzle-orm";
-import type { Database } from "../db";
-import { auditLogs } from "../db/schema";
+import type { Sql } from "../db";
 
 interface AuditParams {
   actorUserId: string | null;
@@ -10,15 +8,10 @@ interface AuditParams {
   metadata?: Record<string, unknown>;
 }
 
-type Insertable = { insert: Database["insert"] };
-
-export async function writeAuditLog(db: Insertable, params: AuditParams) {
-  await db.insert(auditLogs).values({
-    id: crypto.randomUUID(),
-    actorUserId: params.actorUserId,
-    action: params.action,
-    targetType: params.targetType,
-    targetId: params.targetId,
-    metadataJson: params.metadata ?? null,
-  });
+export async function writeAuditLog(sql: Sql, params: AuditParams) {
+  const id = crypto.randomUUID();
+  await sql`
+    INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, metadata_json)
+    VALUES (${id}, ${params.actorUserId}, ${params.action}, ${params.targetType}, ${params.targetId}, ${params.metadata ?? null})
+  `;
 }

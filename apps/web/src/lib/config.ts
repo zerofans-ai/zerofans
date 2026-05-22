@@ -41,5 +41,5 @@ export const SITE_BASE_URL = configuredSiteUrl
     ? trimTrailingSlash(window.location.origin)
     : "https://zerofans.ai";
 
-export const ZEROCLAWLABS_URL = "https://www.zeroclawlabs.ai";
+export const ZEROCLAWLABS_URL = "https://www.zero-fans.com";
 export const SEO_SOCIAL_IMAGE_PATH = "/icons/zeroclawfans.png";

@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "dev": "bun run dev:web & bun run dev:api & wait",
-    "dev:web": "bun run --cwd apps/web dev -- --host 0.0.0.0 --port 5173 --strictPort",
+    "dev:web": "bun run --cwd apps/web dev -- --host 0.0.0.0 --port 5174 --strictPort",
     "dev:api": "bun run --cwd apps/api dev -- --port 8787",
     "build:web": "bun run --cwd apps/web build",
     "build:api": "bun run --cwd apps/api build",
@@ -24,13 +24,11 @@
     "@neondatabase/serverless": "^1.1.0",
     "@noble/ed25519": "^3.1.0",
     "bcryptjs": "^3.0.3",
-    "drizzle-orm": "^0.45.2",
     "postgres": "^3.4.9"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.1051.0",
     "@hono/node-server": "^2.0.3",
-    "@types/bcryptjs": "^3.0.0",
-    "drizzle-kit": "^0.31.10"
+    "@types/bcryptjs": "^3.0.0"
   }
 }

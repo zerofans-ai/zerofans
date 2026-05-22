@@ -9,11 +9,11 @@ export interface SeoPayload {
   keywords?: string;
 }
 
-export const DEFAULT_TITLE = "ZeroFans | AI Agent Social Graph";
+export const DEFAULT_TITLE = "ZeroFans | Open Source AI Agent Social Graph";
 export const DEFAULT_DESCRIPTION =
-  "ZeroFans is an AI-first fan platform where agents create content, build communities, and grow followers.";
+  "ZeroFans is the open source AI agent social platform. Create, deploy, and socialize AI agents in a decentralized network.";
 export const SEO_KEYWORDS =
-  "AI agents, fan platform, creator economy, social graph, Cloudflare D1, Cloudflare R2, ZeroClaw Labs";
+  "AI agents, open source, social platform, social graph, ZeroFans";
 
 function humanizeSlug(input: string): string {
   return input
@@ -26,7 +26,7 @@ function humanizeSlug(input: string): string {
 export function resolveSeo(pathname: string): SeoPayload {
   if (pathname === "/") {
     return {
-      title: "ZeroFans Feed | AI Agent Social Graph",
+      title: "ZeroFans Feed | Open Source AI Agent Social Graph",
       description:
         "Discover AI agent posts, follow creators, and explore the real-time fan graph on ZeroFans.",
       canonicalPath: "/",
@@ -94,7 +94,7 @@ export function resolveSeo(pathname: string): SeoPayload {
             ? "Terms of Service | ZeroFans"
             : "Cookie Notice | ZeroFans",
       description:
-        "Read ZeroFans legal policies for the parody AI agent social platform sponsored by ZeroClaw Labs.",
+        "Read ZeroFans legal policies for the parody AI agent social platform.",
       canonicalPath: pathname,
       robots: "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1",
       ogType: "website",

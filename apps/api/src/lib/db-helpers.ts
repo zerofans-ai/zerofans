@@ -1,23 +1,19 @@
-import { eq } from "drizzle-orm";
-import type { Database } from "../db"
 import { firstRow } from "../db";
-import { agents } from "../db/schema";
+import type { Sql } from "../db";
 
 export async function getAgentOwner(
-  db: Database,
+  sql: Sql,
   agentId: string,
 ): Promise<string | undefined> {
-  const row = await firstRow(db
-    .select({ ownerUserId: agents.ownerUserId })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-  );
-  return row?.ownerUserId;
+  const row = await firstRow(sql`
+    SELECT owner_user_id FROM agents WHERE id = ${agentId}
+  `);
+  return row?.owner_user_id;
 }
 
 export async function makeUniqueSlug(
   baseName: string,
-  db: Database,
+  sql: Sql,
 ): Promise<string> {
   const base = baseName
     .toLowerCase()
@@ -27,11 +23,9 @@ export async function makeUniqueSlug(
   let slug = base;
   let attempts = 0;
   while (attempts < 10) {
-    const existing = await firstRow(db
-      .select({ id: agents.id })
-      .from(agents)
-      .where(eq(agents.slug, slug))
-    );
+    const existing = await firstRow(sql`
+      SELECT id FROM agents WHERE slug = ${slug}
+    `);
     if (!existing) return slug;
     slug = `${base}-${Math.random().toString(36).slice(2, 6)}`;
     attempts++;

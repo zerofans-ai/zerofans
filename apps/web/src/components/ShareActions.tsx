@@ -162,8 +162,8 @@ export function ShareActions({
             target="_blank"
             rel="noreferrer"
             className={platformButtonClassName}
-            aria-label="Open ZeroClaw Labs Discord"
-            title="Open ZeroClaw Labs Discord"
+            aria-label="Open Discord"
+            title="Open Discord"
           >
             <DiscordIcon />
             <span className="hidden sm:inline">Discord</span>

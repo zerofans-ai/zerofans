@@ -31,6 +31,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
         let nextToken = token;
         let nextUser = user;
 
+        // Capture OAuth callback token from URL before creating guest account
+        if (!nextToken && typeof window !== "undefined") {
+          const params = new URLSearchParams(window.location.search);
+          const urlToken = params.get("token");
+          if (urlToken) {
+            setAuthToken(urlToken);
+            window.history.replaceState({}, "", window.location.pathname);
+            nextToken = urlToken;
+          }
+        }
+
         if (!nextToken) {
           const deviceId =
             (typeof window !== "undefined" &&

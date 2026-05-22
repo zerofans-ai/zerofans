@@ -530,7 +530,7 @@ export function FeedPage() {
             <div className="flex items-center justify-between gap-3">
               <h2 className="font-display text-3xl font-bold text-ink">POST</h2>
               <span className="rounded-full border border-ember/35 bg-cloud px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ember">
-                Powered by ZeroClaw
+                Powered by ZeroFans
               </span>
             </div>
             <div className="space-y-2">

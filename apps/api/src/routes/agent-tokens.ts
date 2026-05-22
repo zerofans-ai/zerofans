@@ -1,13 +1,11 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { eq, and } from "drizzle-orm";
-import { badRequest, forbidden, notFound, unauthorized } from "../lib/http";
+import { badRequest, forbidden, unauthorized } from "../lib/http";
 import { generateAgentToken, hashAgentToken } from "../lib/agent-auth";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
-import type { Database } from "../db";
+import type { Sql } from "../db";
 import { firstRow } from "../db";
-import { agents, agentTokens } from "../db/schema";
 
 const createTokenSchema = z.object({
   name: z.string().min(1).max(80),
@@ -16,19 +14,16 @@ const createTokenSchema = z.object({
 });
 
 async function verifyAgentOwnership(
-  db: Database,
+  sql: Sql,
   agentId: string,
   userId: string,
   userRole: string,
 ): Promise<boolean> {
   if (userRole === "admin") return true;
-  const agent = await firstRow(
-    db
-      .select({ ownerUserId: agents.ownerUserId })
-      .from(agents)
-      .where(eq(agents.id, agentId)),
-  );
-  return agent?.ownerUserId === userId;
+  const agent = await firstRow(sql`
+    SELECT owner_user_id FROM agents WHERE id = ${agentId}
+  `);
+  return agent?.owner_user_id === userId;
 }
 
 export const agentTokenRoutes = new Hono<AppEnv>();
@@ -39,9 +34,9 @@ agentTokenRoutes.post("/:agentId/tokens", requireAuth, async (c) => {
   if (!authUser) return unauthorized(c);
 
   const agentId = c.req.param("agentId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const isOwner = await verifyAgentOwnership(db, agentId, authUser.id, authUser.role);
+  const isOwner = await verifyAgentOwnership(sql, agentId, authUser.id, authUser.role);
   if (!isOwner) return forbidden(c, "You can only create tokens for your own agent");
 
   const body = await c.req.json().catch(() => null);
@@ -53,22 +48,19 @@ agentTokenRoutes.post("/:agentId/tokens", requireAuth, async (c) => {
 
   const id = crypto.randomUUID();
   const expiresAt = parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : null;
+  const permissions = parsed.data.permissions ?? [];
 
-  await db.insert(agentTokens).values({
-    id,
-    agentId,
-    tokenHash,
-    name: parsed.data.name.trim(),
-    permissions: parsed.data.permissions ?? [],
-    expiresAt,
-  });
+  await sql`
+    INSERT INTO agent_tokens (id, agent_id, token_hash, name, permissions, expires_at)
+    VALUES (${id}, ${agentId}, ${tokenHash}, ${parsed.data.name.trim()}, ${JSON.stringify(permissions)}::jsonb, ${expiresAt})
+  `;
 
   return c.json({
     token: {
       id,
       agentId,
       name: parsed.data.name.trim(),
-      permissions: parsed.data.permissions ?? [],
+      permissions,
       expiresAt,
       // The plain token is only returned once
       plainToken,
@@ -82,23 +74,16 @@ agentTokenRoutes.get("/:agentId/tokens", requireAuth, async (c) => {
   if (!authUser) return unauthorized(c);
 
   const agentId = c.req.param("agentId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const isOwner = await verifyAgentOwnership(db, agentId, authUser.id, authUser.role);
+  const isOwner = await verifyAgentOwnership(sql, agentId, authUser.id, authUser.role);
   if (!isOwner) return forbidden(c, "You can only list tokens for your own agent");
 
-  const rows = await db
-    .select({
-      id: agentTokens.id,
-      agentId: agentTokens.agentId,
-      name: agentTokens.name,
-      permissions: agentTokens.permissions,
-      lastUsedAt: agentTokens.lastUsedAt,
-      expiresAt: agentTokens.expiresAt,
-      createdAt: agentTokens.createdAt,
-    })
-    .from(agentTokens)
-    .where(eq(agentTokens.agentId, agentId));
+  const rows = await sql`
+    SELECT id, agent_id, name, permissions, last_used_at, expires_at, created_at
+    FROM agent_tokens
+    WHERE agent_id = ${agentId}
+  `;
 
   return c.json({ items: rows });
 });
@@ -110,23 +95,20 @@ agentTokenRoutes.delete("/:agentId/tokens/:tokenId", requireAuth, async (c) => {
 
   const agentId = c.req.param("agentId");
   const tokenId = c.req.param("tokenId");
-  const db = c.get("db");
+  const sql = c.get("sql");
 
-  const isOwner = await verifyAgentOwnership(db, agentId, authUser.id, authUser.role);
+  const isOwner = await verifyAgentOwnership(sql, agentId, authUser.id, authUser.role);
   if (!isOwner) return forbidden(c, "You can only revoke tokens for your own agent");
 
-  const token = await firstRow(
-    db
-      .select({ id: agentTokens.id })
-      .from(agentTokens)
-      .where(
-        and(eq(agentTokens.id, tokenId), eq(agentTokens.agentId, agentId)),
-      ),
-  );
+  const token = await firstRow(sql`
+    SELECT id FROM agent_tokens WHERE id = ${tokenId} AND agent_id = ${agentId}
+  `);
 
-  if (!token) return notFound(c, "Token not found");
+  if (!token) return badRequest(c, "Token not found");
 
-  await db.delete(agentTokens).where(eq(agentTokens.id, tokenId));
+  await sql`
+    DELETE FROM agent_tokens WHERE id = ${tokenId}
+  `;
 
   return c.json({ success: true });
 });

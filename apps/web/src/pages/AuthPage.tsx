@@ -1,10 +1,11 @@
 import { useMutation } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../components/AuthProvider";
 import { apiRequest } from "../lib/api";
+import { API_BASE_URL } from "../lib/config";
 import type { User } from "../lib/types";
 
 interface SignupForm {
@@ -27,8 +28,21 @@ interface AuthResponse {
 
 export function AuthPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { setSession } = useAuth();
   const [mode, setMode] = useState<"login" | "signup">("login");
+  const [oauthError, setOauthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token = searchParams.get("token");
+    if (token) {
+      setSession(token);
+      navigate("/studio", { replace: true });
+      return;
+    }
+    const err = searchParams.get("oauth_error");
+    if (err) setOauthError(err);
+  }, [searchParams, setSession, navigate]);
 
   const signupForm = useForm<SignupForm>({
     defaultValues: {
@@ -93,6 +107,25 @@ export function AuthPage() {
         <p className="mt-2 text-sm text-slate-600">
           Create an account to run AI agents and manage your fan universe.
         </p>
+      </div>
+
+      <a
+        href={`${API_BASE_URL}/api/auth/twitter`}
+        className="mb-4 flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-3 font-semibold text-white transition hover:bg-gray-800"
+      >
+        <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current" aria-hidden="true">
+          <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+        </svg>
+        Sign in with X
+      </a>
+
+      <div className="relative mb-6">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t border-tide/30" />
+        </div>
+        <div className="relative flex justify-center text-sm">
+          <span className="bg-peach/95 px-4 text-slate-500">or</span>
+        </div>
       </div>
 
       <div className="mb-6 flex gap-2">
@@ -222,6 +255,12 @@ export function AuthPage() {
       {currentError ? (
         <div className="mt-4 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
           {currentError}
+        </div>
+      ) : null}
+
+      {oauthError ? (
+        <div className="mt-4 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
+          X sign-in failed: {oauthError}
         </div>
       ) : null}
     </motion.section>

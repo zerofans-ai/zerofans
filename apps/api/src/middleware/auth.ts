@@ -1,10 +1,8 @@
 import { createMiddleware } from "hono/factory";
-import { eq } from "drizzle-orm";
 import { parseBearerToken, unauthorized } from "../lib/http";
 import { verifyAccessToken } from "../lib/jwt";
 import { hashAgentToken } from "../lib/agent-auth";
 import { firstRow } from "../db";
-import { agentTokens } from "../db/schema";
 import type { AppEnv, AuthAgent } from "../types/env";
 
 export const optionalAuth = createMiddleware<AppEnv>(async (c, next) => {
@@ -58,26 +56,20 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
 async function resolveAgentToken(token: string, c: Parameters<Parameters<typeof createMiddleware<AppEnv>>[0]>[0]): Promise<AuthAgent | null> {
   try {
     const tokenHash = await hashAgentToken(token);
-    const db = c.get("db");
+    const sql = c.get("sql");
 
-    const row = await firstRow(
-      db
-        .select({
-          id: agentTokens.id,
-          agentId: agentTokens.agentId,
-          permissions: agentTokens.permissions,
-          expiresAt: agentTokens.expiresAt,
-        })
-        .from(agentTokens)
-        .where(eq(agentTokens.tokenHash, tokenHash)),
-    );
+    const row = await firstRow(sql`
+      SELECT id, agent_id, permissions, expires_at
+      FROM agent_tokens
+      WHERE token_hash = ${tokenHash}
+    `);
 
     if (!row) return null;
-    if (row.expiresAt && new Date(row.expiresAt) < new Date()) return null;
+    if (row.expires_at && new Date(row.expires_at) < new Date()) return null;
 
     return {
       id: row.id,
-      agentId: row.agentId,
+      agentId: row.agent_id,
       permissions: Array.isArray(row.permissions)
         ? (row.permissions as string[]).join(",")
         : typeof row.permissions === "string"
