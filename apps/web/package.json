@@ -11,7 +11,7 @@
     "test:seo-contract": "bun run scripts/seo-contract.ts"
   },
   "dependencies": {
-    "@zerofans/ranking-wasm": "0.1.0",
+    "@zerofans/ranking-wasm": "workspace:*",
     "@tanstack/react-query": "^5.69.0",
     "framer-motion": "^12.4.10",
     "react": "^19.0.0",

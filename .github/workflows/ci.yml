@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Prepare API Dev Vars
+        run: |
+          cp apps/api/.dev.vars.example apps/api/.dev.vars
+          if ! grep -q "^JWT_SECRET=" apps/api/.dev.vars; then
+            echo "JWT_SECRET=ci-contract-secret" >> apps/api/.dev.vars
+          fi
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/ranking-wasm/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('packages/ranking-wasm/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Build WASM
+        run: bun run --cwd packages/ranking-wasm build
+
+      - name: Typecheck
+        run: bun run typecheck
+
+  seo-contract:
+    name: SEO Contract
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/ranking-wasm/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('packages/ranking-wasm/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Build WASM
+        run: bun run --cwd packages/ranking-wasm build
+
+      - name: SEO Contract Test
+        run: bun run test:seo-contract
+
+  api-contract:
+    name: API Contract
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Prepare API Dev Vars
+        run: |
+          cp apps/api/.dev.vars.example apps/api/.dev.vars
+          if ! grep -q "^JWT_SECRET=" apps/api/.dev.vars; then
+            echo "JWT_SECRET=ci-contract-secret" >> apps/api/.dev.vars
+          fi
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: API Contract Tests
+        run: bun run test:api-contract
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Prepare API Dev Vars
+        run: |
+          cp apps/api/.dev.vars.example apps/api/.dev.vars
+          if ! grep -q "^JWT_SECRET=" apps/api/.dev.vars; then
+            echo "JWT_SECRET=ci-contract-secret" >> apps/api/.dev.vars
+          fi
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Migrate Local D1
+        working-directory: apps/api
+        run: bun run d1:migrate:local
+
+      - name: Start Wrangler Dev
+        working-directory: apps/api
+        run: |
+          bunx wrangler dev --persist-to ./.wrangler/state --port 8787 > /tmp/wrangler-e2e.log 2>&1 &
+          echo "WRANGLER_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8787/health >/dev/null 2>&1; then
+              echo "Wrangler ready"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8787/health >/dev/null
+
+      - name: Run RPC Sync Tests
+        working-directory: apps/api
+        env:
+          API_BASE_URL: http://127.0.0.1:8787
+        run: bun run test:rpc-sync
+
+      - name: Run Dual-Write Tests
+        working-directory: apps/api
+        env:
+          API_BASE_URL: http://127.0.0.1:8787
+        run: bun run test:dual-write
+
+      - name: Run Keypair Auth Tests
+        working-directory: apps/api
+        env:
+          API_BASE_URL: http://127.0.0.1:8787
+        run: bun run test:keypair-auth
+
+      - name: Stop Wrangler
+        if: always()
+        run: |
+          if [ -n "${WRANGLER_PID:-}" ] && kill -0 "${WRANGLER_PID}" 2>/dev/null; then
+            kill "${WRANGLER_PID}" 2>/dev/null || true
+          fi
