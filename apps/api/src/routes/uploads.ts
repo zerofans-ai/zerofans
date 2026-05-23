@@ -141,7 +141,7 @@ uploadsRoutes.put("/put/:key", async (c) => {
   }
 
   const storage = c.get("storage");
-  await storage.put(key, body, {
+  const result = await storage.put(key, body, {
     httpMetadata: {
       contentType: payload.contentType,
       cacheControl: "public, max-age=31536000, immutable",
@@ -152,7 +152,7 @@ uploadsRoutes.put("/put/:key", async (c) => {
     },
   });
 
-  const mediaUrl = `/media/${key}`;
+  const mediaUrl = typeof result === "string" ? `ipfs://${result}` : `/media/${key}`;
 
   return c.json({
     key,

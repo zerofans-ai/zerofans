@@ -2,6 +2,7 @@ import { createMiddleware } from "hono/factory";
 import type { AppEnv } from "../types/env";
 import { R2StorageBucket } from "../lib/storage/r2";
 import { S3StorageBucket } from "../lib/storage/s3";
+import { IPFSStorageBucket } from "../lib/storage/ipfs";
 import type { StorageBucket } from "../lib/storage";
 
 declare module "../types/env" {
@@ -14,7 +15,12 @@ export const storageMiddleware = createMiddleware<AppEnv>(async (c, next) => {
   const backend = c.env.STORAGE_BACKEND ?? "r2";
 
   let storage: StorageBucket;
-  if (backend === "s3") {
+  if (backend === "ipfs") {
+    storage = new IPFSStorageBucket({
+      jwt: c.env.PINATA_JWT!,
+      gateway: c.env.PINATA_GATEWAY!,
+    });
+  } else if (backend === "s3") {
     storage = new S3StorageBucket({
       endpoint: c.env.S3_ENDPOINT!,
       bucket: c.env.S3_BUCKET!,

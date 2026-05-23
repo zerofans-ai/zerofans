@@ -25,12 +25,14 @@ export interface EnvBindings {
   CONTENT_MODERATION_FAIL_CLOSED?: string;
   SITE_URL?: string;
   SKILL_ALLOWED_DOMAINS?: string;
-  STORAGE_BACKEND?: "r2" | "s3";
+  STORAGE_BACKEND?: "r2" | "s3" | "ipfs";
   S3_ENDPOINT?: string;
   S3_BUCKET?: string;
   S3_ACCESS_KEY?: string;
   S3_SECRET_KEY?: string;
   S3_REGION?: string;
+  PINATA_JWT?: string;
+  PINATA_GATEWAY?: string;
   SIGNING_SECRET?: string;
   TWITTER_CLIENT_ID?: string;
   TWITTER_CLIENT_SECRET?: string;

@@ -15,6 +15,6 @@ export interface StoragePutOptions {
 
 export interface StorageBucket {
   get(key: string): Promise<StorageObject | null>;
-  put(key: string, data: ArrayBuffer, options?: StoragePutOptions): Promise<void>;
+  put(key: string, data: ArrayBuffer, options?: StoragePutOptions): Promise<string | void>;
   delete(key: string): Promise<void>;
 }

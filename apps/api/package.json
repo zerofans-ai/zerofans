@@ -18,7 +18,8 @@
     "seed:skills": "bun run scripts/seed-skills.ts",
     "test:rpc-sync": "bun run scripts/test-rpc-sync.ts",
     "test:dual-write": "bun run scripts/test-dual-write.ts",
-    "test:keypair-auth": "bun run scripts/test-keypair-auth.ts"
+    "test:keypair-auth": "bun run scripts/test-keypair-auth.ts",
+    "test:ipfs-upload": "bun run scripts/test-ipfs-upload.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.3.0",
