@@ -9,6 +9,7 @@ import {
   verifyPassword,
   rehashPassword,
 } from "../lib/security";
+import { verifySignature } from "../lib/signing";
 import { requireAuth } from "../middleware/auth";
 import { writeAuditLog } from "../lib/audit";
 import type { AppEnv, AuthUser } from "../types/env";
@@ -642,4 +643,115 @@ authRoutes.get("/twitter/callback", async (c) => {
   const token = await issueAccessToken(user, c.env);
 
   return c.redirect(`${siteUrl}/auth?token=${encodeURIComponent(token)}`);
+});
+
+// ── Keypair Auth ──
+
+const CHALLENGE_TTL_SECONDS = 300; // 5 minutes
+
+authRoutes.get("/challenge", async (c) => {
+  const pubkey = c.req.query("pubkey");
+  if (!pubkey) {
+    return badRequest(c, "pubkey query parameter required");
+  }
+
+  const sql = c.get("sql");
+  const nonce = crypto.randomUUID().replace(/-/g, "");
+
+  await sql`
+    INSERT INTO keypair_challenges (nonce, pubkey)
+    VALUES (${nonce}, ${pubkey})
+  `;
+
+  return c.json({ nonce, expiresIn: CHALLENGE_TTL_SECONDS });
+});
+
+authRoutes.post("/keypair-login", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const schema = z.object({
+    pubkey: z.string().min(1),
+    signature: z.string().min(1),
+    nonce: z.string().min(1),
+  });
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    return badRequest(c, "Invalid keypair-login payload");
+  }
+
+  const { pubkey, signature, nonce } = parsed.data;
+  const sql = c.get("sql");
+
+  // Look up and validate challenge
+  const challenge = await firstRow(sql`
+    SELECT nonce, pubkey, created_at, used FROM keypair_challenges
+    WHERE nonce = ${nonce} AND pubkey = ${pubkey} AND used = false
+  `) as { nonce: string; pubkey: string; created_at: string; used: boolean } | undefined;
+
+  if (!challenge) {
+    return badRequest(c, "Invalid or expired challenge");
+  }
+
+  // Check TTL (5 minutes)
+  const createdAt = new Date(challenge.created_at).getTime();
+  const age = (Date.now() - createdAt) / 1000;
+  if (age > CHALLENGE_TTL_SECONDS) {
+    await sql`UPDATE keypair_challenges SET used = true WHERE nonce = ${nonce}`;
+    return badRequest(c, "Challenge expired");
+  }
+
+  // Verify Ed25519 signature
+  // The pubkey comes in as hex (Nostr-style) — convert to base64 for verifySignature
+  let pubkeyBase64: string;
+  try {
+    const hexBytes = new Uint8Array(pubkey.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    pubkeyBase64 = btoa(String.fromCharCode(...hexBytes));
+  } catch {
+    // Maybe already base64
+    pubkeyBase64 = pubkey;
+  }
+
+  const sigValid = await verifySignature(pubkeyBase64, signature, nonce);
+  if (!sigValid) {
+    return unauthorized(c, "Invalid signature");
+  }
+
+  // Mark challenge as used
+  await sql`UPDATE keypair_challenges SET used = true WHERE nonce = ${nonce}`;
+
+  // Find agent by public key (hex)
+  // Agent public_key is stored as base64, so check both formats
+  const agent = await firstRow(sql`
+    SELECT id, owner_user_id, name FROM agents
+    WHERE public_key = ${pubkeyBase64} OR public_key = ${pubkey}
+    LIMIT 1
+  `) as { id: string; owner_user_id: string; name: string } | undefined;
+
+  if (!agent) {
+    return badRequest(c, "No agent found for this public key. Create an agent first.");
+  }
+
+  // Look up the owner user
+  const user = await firstRow(sql`
+    SELECT id, email, handle, role FROM users WHERE id = ${agent.owner_user_id}
+  `) as { id: string; email: string; handle: string; role: "user" | "admin" } | undefined;
+
+  if (!user) {
+    return badRequest(c, "Agent owner not found");
+  }
+
+  const authUser: AuthUser = formatAuthUser(user);
+  const token = await issueAccessToken(authUser, c.env);
+
+  await writeAuditLog(sql, {
+    actorUserId: user.id,
+    action: "keypair_login",
+    targetType: "agent",
+    targetId: agent.id,
+  });
+
+  return c.json({
+    token,
+    user: authUser,
+    agent: { id: agent.id, name: agent.name },
+  });
 });

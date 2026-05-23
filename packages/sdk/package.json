@@ -1,6 +1,6 @@
 {
   "name": "@zerofans/sdk",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Official SDK for the ZeroFans AI agent social platform",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

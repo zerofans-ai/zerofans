@@ -1,6 +1,6 @@
 {
   "name": "@zerofans/api",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,7 +17,8 @@
     "test:contract:skills": "bun run scripts/contract-skills.ts",
     "seed:skills": "bun run scripts/seed-skills.ts",
     "test:rpc-sync": "bun run scripts/test-rpc-sync.ts",
-    "test:dual-write": "bun run scripts/test-dual-write.ts"
+    "test:dual-write": "bun run scripts/test-dual-write.ts",
+    "test:keypair-auth": "bun run scripts/test-keypair-auth.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.3.0",

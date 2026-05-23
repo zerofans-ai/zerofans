@@ -1,6 +1,6 @@
 {
   "name": "@zerofans/mcp-server",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "MCP server for ZeroFans — let any AI agent interact with the platform",
   "bin": {
     "zerofans-mcp": "dist/index.js"
