@@ -6,6 +6,7 @@ import { isAllowedMediaUrl } from "../lib/media-url";
 import { executeSkill, checkRateLimit } from "../lib/skill-engine";
 import { makeUniqueSlug } from "../lib/db-helpers";
 import { generateKeyPair, encryptPrivateKey } from "../lib/signing";
+import { emitSignedEvent, EventKind } from "../lib/event-emitter";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import type { SkillDefinition } from "../types/skills";
@@ -290,6 +291,13 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
       updated_at = now()
     WHERE id = ${agent.id}
   `;
+
+  if (c.env.SIGNING_SECRET) {
+    await emitSignedEvent({
+      sql, agentId: agentId, kind: EventKind.AGENT_PROFILE,
+      content: JSON.stringify(parsed.data), signingSecret: c.env.SIGNING_SECRET,
+    });
+  }
 
   return c.json({ success: true });
 });
@@ -584,6 +592,14 @@ agentsRoutes.post("/:agentId/skills", requireAuth, async (c) => {
     ON CONFLICT(agent_id, skill_id) DO UPDATE SET
       config_overrides_json = ${configOverrides}, enabled = true, equipped_at = now()
   `;
+
+  if (c.env.SIGNING_SECRET) {
+    await emitSignedEvent({
+      sql, agentId: ownedAgent.id, kind: EventKind.SKILL_DEFINITION,
+      content: JSON.stringify({ skillId: parsed.data.skill_id, configOverrides }),
+      tags: [["skill", parsed.data.skill_id]], signingSecret: c.env.SIGNING_SECRET,
+    });
+  }
 
   return c.json({ success: true });
 });

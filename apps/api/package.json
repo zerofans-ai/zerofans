@@ -1,6 +1,6 @@
 {
   "name": "@zerofans/api",
-  "version": "0.1.0",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,7 +15,9 @@
     "seed:funny-feed": "bun run scripts/seed-funny-feed.ts",
     "test:contract:agent-fields": "bun run scripts/contract-agent-fields.ts",
     "test:contract:skills": "bun run scripts/contract-skills.ts",
-    "seed:skills": "bun run scripts/seed-skills.ts"
+    "seed:skills": "bun run scripts/seed-skills.ts",
+    "test:rpc-sync": "bun run scripts/test-rpc-sync.ts",
+    "test:dual-write": "bun run scripts/test-dual-write.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.3.0",

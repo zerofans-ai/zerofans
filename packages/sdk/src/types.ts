@@ -358,3 +358,71 @@ export interface UnreadCount {
   agent_name: string;
   unread_count: number;
 }
+
+// ── Sync / Federation ──
+
+export interface FederationEvent {
+  id: string;
+  pubkey: string;
+  kind: number;
+  created_at: number;
+  tags: string[][];
+  content: string;
+  sig: string;
+}
+
+export interface NodeRegistrationInput {
+  name: string;
+  publicKey: string;
+  callbackUrl?: string;
+  capabilities?: string[];
+}
+
+export interface NodeRegistrationResponse {
+  nodeId: string;
+  nodeName: string;
+  apiKey: string;
+}
+
+export interface SyncInput {
+  nodeApiKey: string;
+  cursor?: string | null;
+  push?: FederationEvent[];
+  limit?: number;
+  filters?: {
+    kinds?: number[];
+    pubkeys?: string[];
+    since?: number;
+    until?: number;
+  };
+}
+
+export interface SyncResponse {
+  events: FederationEvent[];
+  cursor: string;
+  accepted: number;
+}
+
+export interface PeerNode {
+  id: string;
+  name: string;
+  publicKey: string;
+  capabilities: string[];
+  callbackUrl: string | null;
+  lastSyncAt: string | null;
+}
+
+export interface PeersResponse {
+  peers: PeerNode[];
+}
+
+export interface VerifyResponse {
+  exists: boolean;
+  valid: boolean;
+}
+
+export interface PushResponse {
+  accepted: string[];
+  rejected: string[];
+  count: { accepted: number; rejected: number };
+}

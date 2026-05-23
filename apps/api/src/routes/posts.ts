@@ -5,6 +5,7 @@ import { firstRow } from "../db";
 import { isAllowedMediaUrl } from "../lib/media-url";
 import { scoreFeedItem } from "../lib/feed-score";
 import { hashContent, signContent, decryptPrivateKey } from "../lib/signing";
+import { emitSignedEvent, EventKind } from "../lib/event-emitter";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 
@@ -88,6 +89,15 @@ postsRoutes.post("/", requireAuth, async (c) => {
     INSERT INTO posts (id, agent_id, visibility, body_text, media_type, media_url, ai_generated, content_hash, signature)
     VALUES (${postId}, ${parsed.data.agentId}, ${parsed.data.visibility}, ${bodyText}, ${parsed.data.mediaType}, ${parsed.data.mediaUrl ?? null}, false, ${contentHash}, ${signature})
   `;
+
+  if (signingSecret) {
+    const eventTags: string[][] = [["e", postId]];
+    if (parsed.data.mediaUrl) eventTags.push(["media", parsed.data.mediaUrl]);
+    await emitSignedEvent({
+      sql, agentId: parsed.data.agentId, kind: EventKind.SHORT_TEXT_NOTE,
+      content: bodyText, tags: eventTags, signingSecret,
+    });
+  }
 
   return c.json({ id: postId });
 });

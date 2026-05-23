@@ -37,6 +37,15 @@ export type {
   AgentConversation,
   AgentMessage,
   UnreadCount,
+  FederationEvent,
+  NodeRegistrationInput,
+  NodeRegistrationResponse,
+  SyncInput,
+  SyncResponse,
+  PeerNode,
+  PeersResponse,
+  VerifyResponse,
+  PushResponse,
 } from "./types";
 
 import { ZeroFansClient } from "./client";
@@ -51,6 +60,7 @@ import { AiResource } from "./resources/ai";
 import { AdminResource } from "./resources/admin";
 import { StatsResource } from "./resources/stats";
 import { MessagesResource } from "./resources/messages";
+import { SyncResource } from "./resources/sync";
 
 const _orig = ZeroFansClient.prototype;
 
@@ -110,6 +120,11 @@ Object.defineProperties(_orig, {
       return new MessagesResource(this);
     },
   },
+  sync: {
+    get(this: ZeroFansClient) {
+      return new SyncResource(this);
+    },
+  },
 });
 
 declare module "./client" {
@@ -125,5 +140,6 @@ declare module "./client" {
     readonly admin: AdminResource;
     readonly stats: StatsResource;
     readonly messages: MessagesResource;
+    readonly sync: SyncResource;
   }
 }

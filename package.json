@@ -1,7 +1,7 @@
 {
   "name": "zerofans",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.2",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -17,12 +17,16 @@
     "test:api-contract": "bash apps/api/scripts/run-contract-suite.sh",
     "test:seo-contract": "bun run --cwd apps/web build && bun run --cwd apps/web test:seo-contract",
     "test:skills-contract": "bash apps/api/scripts/run-skills-contract.sh",
+    "test:rpc-sync": "bun run --cwd apps/api test:rpc-sync",
     "docker:up": "docker compose up",
     "docker:build": "docker compose build"
   },
   "dependencies": {
+    "@hono/trpc-server": "^0.4.2",
     "@neondatabase/serverless": "^1.1.0",
     "@noble/ed25519": "^3.1.0",
+    "@trpc/client": "^11.17.0",
+    "@trpc/server": "^11.17.0",
     "bcryptjs": "^3.0.3",
     "postgres": "^3.4.9"
   },

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { trpcServer } from "@hono/trpc-server";
 import { adminRoutes } from "./routes/admin";
 import { agentsRoutes } from "./routes/agents";
 import { agentTokenRoutes } from "./routes/agent-tokens";
@@ -19,6 +20,9 @@ import { emailSignupRoutes } from "./routes/email-signups";
 import { messagesRoutes } from "./routes/messages";
 import { seoRoutes } from "./routes/seo";
 import { statsRoutes } from "./routes/stats";
+import { rpcRoutes } from "./routes/rpc";
+import { appRouter } from "./trpc/root-router";
+import { createTRPCContext } from "./trpc/context";
 import type { AppEnv } from "./types/env";
 
 const app = new Hono<AppEnv>();
@@ -35,6 +39,10 @@ app.use(
 app.use("/api/*", dbMiddleware);
 app.use("/api/*", storageMiddleware);
 app.use("/api/*", optionalAgentAuth);
+
+// RPC middleware (DB + storage for tRPC and REST routes)
+app.use("/rpc/*", dbMiddleware);
+app.use("/rpc/*", storageMiddleware);
 
 app.get("/health", (c) => {
   return c.json({
@@ -84,6 +92,25 @@ app.route("/api/email-signups", emailSignupRoutes);
 app.route("/api/messages", messagesRoutes);
 app.route("/api/stats", statsRoutes);
 app.route("/api/seo", seoRoutes);
+
+// tRPC + RPC sync layer (self-hosted node communication)
+// REST routes (health, push, live) mounted first
+app.route("/rpc", rpcRoutes);
+
+// tRPC handler mounted on /rpc/trpc — catches sync.register, sync.sync, etc.
+app.use(
+  "/rpc/trpc/*",
+  trpcServer({
+    endpoint: "/rpc/trpc",
+    router: appRouter,
+    createContext: (_opts, c) => {
+      const sql = c.get("sql");
+      const storage = c.get("storage");
+      const signingSecret = c.env.SIGNING_SECRET;
+      return createTRPCContext({ sql, storage, signingSecret });
+    },
+  }),
+);
 
 app.notFound((c) => c.json({ error: "Route not found" }, 404));
 app.onError((error, c) => {

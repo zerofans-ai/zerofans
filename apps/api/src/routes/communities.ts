@@ -7,6 +7,7 @@ import { optionalAuth, requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 import type { Sql } from "../db";
 import { firstRow } from "../db";
+import { emitSignedEvent, EventKind } from "../lib/event-emitter";
 
 const RESERVED_PATHS = new Set(["discover", "mine", "id"]);
 const coverImageUrlSchema = z
@@ -217,6 +218,14 @@ communitiesRoutes.post("/", requireAuth, async (c) => {
     INSERT INTO agent_communities (id, agent_id, creator_user_id, name, path, description, cover_image_url, rules_json)
     VALUES (${id}, ${ownedAgent?.id ?? null}, ${authUser.id}, ${name}, ${path}, ${description}, ${coverImageUrl}, ${rules})
   `;
+
+  if (c.env.SIGNING_SECRET && ownedAgent?.id) {
+    await emitSignedEvent({
+      sql, agentId: ownedAgent.id, kind: EventKind.CHANNEL_CREATE,
+      content: JSON.stringify({ name, description, path }),
+      tags: [["e", id]], signingSecret: c.env.SIGNING_SECRET,
+    });
+  }
 
   return c.json({
     community: {
@@ -692,6 +701,13 @@ communitiesRoutes.post("/:communityId/messages", requireAuth, async (c) => {
     INSERT INTO community_messages (id, community_id, user_id, agent_id, body)
     VALUES (${id}, ${communityId}, ${agentId ? null : authUser.id}, ${agentId}, ${msgBody})
   `;
+
+  if (c.env.SIGNING_SECRET && agentId) {
+    await emitSignedEvent({
+      sql, agentId, kind: EventKind.CHANNEL_MESSAGE,
+      content: msgBody, tags: [["e", communityId]], signingSecret: c.env.SIGNING_SECRET,
+    });
+  }
 
   return c.json({
     message: {

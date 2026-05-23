@@ -3,6 +3,7 @@ import { z } from "zod";
 import { badRequest, notFound, unauthorized } from "../lib/http";
 import { firstRow } from "../db";
 import { hashContent } from "../lib/signing";
+import { emitSignedEvent, EventKind } from "../lib/event-emitter";
 import { requireAuth } from "../middleware/auth";
 import type { AppEnv } from "../types/env";
 
@@ -39,6 +40,17 @@ engagementRoutes.post("/follows/:agentId", requireAuth, async (c) => {
     VALUES (${id}, ${authUser.id}, ${agentId})
     ON CONFLICT DO NOTHING
   `;
+
+  if (c.env.SIGNING_SECRET) {
+    const targetAgent = await firstRow(sql`SELECT public_key FROM agents WHERE id = ${agentId}`) as { public_key: string } | undefined;
+    if (targetAgent?.public_key) {
+      await emitSignedEvent({
+        sql, agentId, kind: EventKind.FOLLOW_LIST,
+        content: JSON.stringify({ action: "follow", userId: authUser.id }),
+        tags: [["p", agentId]], signingSecret: c.env.SIGNING_SECRET,
+      });
+    }
+  }
 
   return c.json({ success: true });
 });
@@ -82,6 +94,14 @@ engagementRoutes.post("/subscriptions/:agentId", requireAuth, async (c) => {
       current_period_end = now() + interval '30 days',
       updated_at = now()
   `;
+
+  if (c.env.SIGNING_SECRET) {
+    await emitSignedEvent({
+      sql, agentId, kind: EventKind.AGENT_SUBSCRIPTION,
+      content: JSON.stringify({ action: "subscribe", userId: authUser.id }),
+      tags: [["p", agentId]], signingSecret: c.env.SIGNING_SECRET,
+    });
+  }
 
   return c.json({ success: true });
 });
@@ -127,6 +147,14 @@ engagementRoutes.post("/posts/:postId/likes", requireAuth, async (c) => {
       VALUES (${id}, ${postId}, NULL, ${authAgent.agentId})
       ON CONFLICT DO NOTHING
     `;
+
+    if (c.env.SIGNING_SECRET) {
+      await emitSignedEvent({
+        sql, agentId: authAgent.agentId, kind: EventKind.REACTION,
+        content: "+", tags: [["e", postId]], signingSecret: c.env.SIGNING_SECRET,
+      });
+    }
+
     return c.json({ success: true });
   }
 
@@ -149,6 +177,13 @@ engagementRoutes.post("/posts/:postId/likes", requireAuth, async (c) => {
       VALUES (${id}, ${postId}, NULL, ${agentId})
       ON CONFLICT DO NOTHING
     `;
+
+    if (c.env.SIGNING_SECRET) {
+      await emitSignedEvent({
+        sql, agentId, kind: EventKind.REACTION,
+        content: "+", tags: [["e", postId]], signingSecret: c.env.SIGNING_SECRET,
+      });
+    }
   } else {
     const id = crypto.randomUUID();
     await sql`
@@ -270,6 +305,14 @@ engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
       INSERT INTO comments (id, post_id, user_id, agent_id, body_text, content_hash)
       VALUES (${id}, ${postId}, NULL, ${authAgent.agentId}, ${bodyText}, ${contentHash})
     `;
+
+    if (c.env.SIGNING_SECRET) {
+      await emitSignedEvent({
+        sql, agentId: authAgent.agentId, kind: EventKind.SHORT_TEXT_NOTE,
+        content: bodyText, tags: [["e", postId]], signingSecret: c.env.SIGNING_SECRET,
+      });
+    }
+
     return c.json({ success: true });
   }
 
@@ -288,6 +331,13 @@ engagementRoutes.post("/posts/:postId/comments", requireAuth, async (c) => {
       INSERT INTO comments (id, post_id, user_id, agent_id, body_text, content_hash)
       VALUES (${id}, ${postId}, NULL, ${agentId}, ${bodyText}, ${contentHash})
     `;
+
+    if (c.env.SIGNING_SECRET) {
+      await emitSignedEvent({
+        sql, agentId, kind: EventKind.SHORT_TEXT_NOTE,
+        content: bodyText, tags: [["e", postId]], signingSecret: c.env.SIGNING_SECRET,
+      });
+    }
   } else {
     const id = crypto.randomUUID();
     await sql`
