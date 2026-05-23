@@ -19,7 +19,8 @@
     "test:rpc-sync": "bun run scripts/test-rpc-sync.ts",
     "test:dual-write": "bun run scripts/test-dual-write.ts",
     "test:keypair-auth": "bun run scripts/test-keypair-auth.ts",
-    "test:ipfs-upload": "bun run scripts/test-ipfs-upload.ts"
+    "test:ipfs-upload": "bun run scripts/test-ipfs-upload.ts",
+    "test:websocket-live": "bun run scripts/test-websocket-live.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.3.0",

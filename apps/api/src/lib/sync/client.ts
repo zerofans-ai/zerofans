@@ -9,6 +9,7 @@ export interface SyncClientConfig {
   nodeId: string;
   sql: Sql;
   syncIntervalMs?: number;
+  useWebSocket?: boolean;
   onEventReceived?: (event: FederationEvent) => void | Promise<void>;
 }
 
@@ -23,13 +24,15 @@ export interface FederationEvent {
 }
 
 export class SyncClient {
-  private config: Required<Pick<SyncClientConfig, "relayUrl" | "apiKey" | "nodeId" | "sql" | "syncIntervalMs">> & {
+  private config: Required<Pick<SyncClientConfig, "relayUrl" | "apiKey" | "nodeId" | "sql" | "syncIntervalMs" | "useWebSocket">> & {
     onEventReceived?: (event: FederationEvent) => void | Promise<void>;
   };
   private trpcClient: ReturnType<typeof createTRPCClient<AppRouter>>;
   private cursor: string | null = null;
   private running = false;
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private ws: WebSocket | null = null;
+  private wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: SyncClientConfig) {
     this.config = {
@@ -38,6 +41,7 @@ export class SyncClient {
       nodeId: config.nodeId,
       sql: config.sql,
       syncIntervalMs: config.syncIntervalMs ?? 30_000,
+      useWebSocket: config.useWebSocket ?? false,
       onEventReceived: config.onEventReceived,
     };
 
@@ -62,9 +66,12 @@ export class SyncClient {
     ) as { cursor: string } | undefined;
     this.cursor = row?.cursor ?? null;
 
-    // Initial sync
+    if (this.config.useWebSocket) {
+      this.connectWebSocket();
+    }
+
+    // Initial sync + periodic polling (always runs as fallback)
     await this.sync();
-    // Periodic sync
     this.intervalId = setInterval(() => this.sync(), this.config.syncIntervalMs);
   }
 
@@ -74,6 +81,65 @@ export class SyncClient {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+  }
+
+  private connectWebSocket(): void {
+    const wsUrl = this.config.relayUrl.replace(/^http/, "ws");
+    const url = `${wsUrl}/rpc/live?apiKey=${encodeURIComponent(this.config.apiKey)}`;
+
+    try {
+      this.ws = new WebSocket(url);
+    } catch {
+      console.error("[SyncClient] WebSocket constructor failed");
+      this.scheduleWsReconnect();
+      return;
+    }
+
+    this.ws.onopen = () => {
+      console.log("[SyncClient] WebSocket connected");
+      // Send REQ to subscribe (empty filters = all events)
+      this.ws?.send(JSON.stringify(["REQ", {}]));
+    };
+
+    this.ws.onmessage = (evt) => {
+      try {
+        const data = JSON.parse(evt.data as string);
+        if (Array.isArray(data) && data[0] === "EVENT" && data[1]) {
+          const event = data[1] as FederationEvent;
+          if (this.config.onEventReceived) {
+            this.config.onEventReceived(event);
+          }
+        }
+      } catch {
+        // Ignore non-JSON or control messages
+      }
+    };
+
+    this.ws.onclose = () => {
+      console.log("[SyncClient] WebSocket closed");
+      this.ws = null;
+      if (this.running) this.scheduleWsReconnect();
+    };
+
+    this.ws.onerror = (err) => {
+      console.error("[SyncClient] WebSocket error:", err);
+    };
+  }
+
+  private scheduleWsReconnect(): void {
+    if (this.wsReconnectTimer) return;
+    this.wsReconnectTimer = setTimeout(() => {
+      this.wsReconnectTimer = null;
+      if (this.running) this.connectWebSocket();
+    }, 5_000);
   }
 
   async pushEvents(events: FederationEvent[]): Promise<{ accepted: number }> {

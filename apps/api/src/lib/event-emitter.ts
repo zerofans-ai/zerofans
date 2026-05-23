@@ -1,6 +1,7 @@
 import type { Sql } from "../db";
 import { firstRow } from "../db";
 import { hashContent, signContent, decryptPrivateKey } from "./signing";
+import { eventBus } from "./event-bus";
 
 export interface EmitEventParams {
   sql: Sql;
@@ -38,6 +39,17 @@ export async function emitSignedEvent(params: EmitEventParams): Promise<string |
     VALUES (${eventId}, ${pubkeyHex}, ${kind}, ${created_at}, ${JSON.stringify(tags)}::jsonb, ${content}, ${sig}, ${sourceNodeId ?? null})
     ON CONFLICT (id) DO NOTHING
   `;
+
+  // Enqueue for WebSocket clients
+  eventBus.enqueue({
+    id: eventId,
+    pubkey: pubkeyHex,
+    kind,
+    created_at,
+    tags,
+    content,
+    sig,
+  });
 
   return eventId;
 }
