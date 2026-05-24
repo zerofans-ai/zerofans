@@ -12,6 +12,7 @@
     "dev:api": "bun run --cwd apps/api dev -- --port 8787",
     "build:web": "bun run --cwd apps/web build",
     "build:api": "bun run --cwd apps/api build",
+    "build:self-host": "bun build apps/api/src/server.ts --outdir apps/api/dist --target=bun",
     "build:sdk": "cd packages/sdk && bun run build",
     "typecheck": "bun run --cwd apps/web typecheck && bun run --cwd apps/api typecheck",
     "test:api-contract": "bash apps/api/scripts/run-contract-suite.sh",

@@ -1,6 +1,6 @@
 # Self-Hosting ZeroFans
 
-Run your own ZeroFans instance with Docker Compose.
+Run your own ZeroFans node with Docker Compose.
 
 ## Requirements
 
@@ -13,42 +13,38 @@ Run your own ZeroFans instance with Docker Compose.
 ```bash
 git clone https://github.com/zerofans-ai/zerofans.git
 cd zerofans
+bash scripts/zerofans-init.sh
+```
+
+The init wizard generates secrets and configures `.env`. Then:
+
+```bash
+docker compose -f docker-compose.self-host.yml up
+```
+
+Wait for services to be healthy (~30 seconds), then verify:
+
+```bash
+curl http://localhost:8787/health
+```
+
+## One-Liner (No Prompts)
+
+```bash
 cp .env.example .env
+bash scripts/zerofans-init.sh   # auto-generates secrets when non-interactive
+docker compose -f docker-compose.self-host.yml up -d
 ```
-
-Edit `.env` — at minimum change these values:
-
-```bash
-JWT_SECRET=generate-a-random-secret-here
-SIGNING_SECRET=generate-another-random-secret-here
-POSTGRES_PASSWORD=pick-a-strong-password
-MINIO_ROOT_PASSWORD=pick-a-strong-password
-```
-
-Generate secrets with: `openssl rand -hex 32`
-
-Then start everything:
-
-```bash
-docker compose up
-```
-
-Wait for services to be healthy (~30 seconds), then push the database schema:
-
-```bash
-bash scripts/migrate.sh
-```
-
-Visit **http://localhost:5173** to use your instance.
 
 ## Services
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| Web | 5173 | React frontend (nginx) |
 | API | 8787 | Hono API server |
 | PostgreSQL | 5432 | Database |
 | MinIO | 9000 / 9001 | S3-compatible media storage + console |
+
+The init container automatically applies the database schema and creates the MinIO bucket on first run.
 
 ## Environment Variables
 
@@ -68,6 +64,8 @@ Visit **http://localhost:5173** to use your instance.
 | `AI_API_KEY` | No | API key for AI text/image generation |
 | `AI_BASE_URL` | No | AI API base URL |
 | `AI_MODEL` | No | AI model name |
+| `PINATA_JWT` | No | Pinata JWT for IPFS storage |
+| `PINATA_GATEWAY` | No | Pinata gateway URL |
 
 ## Using Cloudflare R2 Instead of MinIO
 
@@ -78,28 +76,43 @@ If you have a Cloudflare account, you can use R2 for media storage:
    ```
    STORAGE_BACKEND=r2
    ```
-3. Remove the MinIO service from `docker-compose.yml` if desired
-4. You'll need to set up R2 bindings in your Cloudflare Workers configuration
+3. Remove the MinIO service from `docker-compose.self-host.yml` if desired
+
+## Federation (Relay Sync)
+
+To sync events with other ZeroFans nodes, register with a relay:
+
+```bash
+# The init wizard can do this, or register manually:
+curl -X POST https://api.zerofans.ai/rpc/trpc/sync.register \
+  -H "content-type:application/json" \
+  -d '{"name":"my-node","publicKey":"YOUR_PUBLIC_KEY"}'
+```
+
+Use the returned API key to configure the SyncClient or connect via WebSocket:
+
+```
+ws://localhost:8787/rpc/live?apiKey=zn_YOUR_API_KEY
+```
 
 ## Custom Domain
 
 1. Point your domain's DNS to your server
 2. Update `SITE_URL` in `.env`
 3. Add a reverse proxy (Caddy, nginx, Traefik) with TLS
-4. Restart: `docker compose up -d`
+4. Restart: `docker compose -f docker-compose.self-host.yml up -d`
 
 ## Backups
 
 ### Database
 
 ```bash
-docker compose exec postgres pg_dump -U zerofans zerofans > backup.sql
+docker compose -f docker-compose.self-host.yml exec postgres pg_dump -U zerofans zerofans > backup.sql
 ```
 
 ### Media Files
 
 ```bash
-# Using MinIO client
 mc alias set local http://localhost:9000 minioadmin minioadmin
 mc mirror local/zerofans-media ./media-backup
 ```
@@ -108,6 +121,6 @@ mc mirror local/zerofans-media ./media-backup
 
 ```bash
 git pull
-docker compose build
-docker compose up -d
+docker compose -f docker-compose.self-host.yml build
+docker compose -f docker-compose.self-host.yml up -d
 ```
