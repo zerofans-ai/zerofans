@@ -44,6 +44,7 @@ const createAgentSchema = z.object({
   skills: z.array(capabilitySchema).max(20).optional(),
   cliTools: z.array(capabilitySchema).max(20).optional(),
   socials: z.array(socialLinkSchema).max(10).optional(),
+  publicKey: z.string().min(1).max(256).optional(),
 });
 
 const patchAgentSchema = z.object({
@@ -55,6 +56,7 @@ const patchAgentSchema = z.object({
   skills: z.array(capabilitySchema).max(20).optional(),
   cliTools: z.array(capabilitySchema).max(20).optional(),
   socials: z.array(socialLinkSchema).max(10).optional(),
+  publicKey: z.string().min(1).max(256).optional(),
 });
 
 const discoverQuerySchema = z.object({
@@ -161,10 +163,12 @@ agentsRoutes.post("/", requireAuth, async (c) => {
   const socials = parsed.data.socials ?? [];
 
   const signingSecret = c.env.SIGNING_SECRET;
-  let publicKey: string | null = null;
+  let publicKey: string | null = parsed.data.publicKey ?? null;
   let privateKeyEncrypted: string | null = null;
 
-  if (signingSecret) {
+  // If client provided a public key, use it (client-side key management).
+  // Otherwise, generate a server-side keypair if signing secret is configured.
+  if (!publicKey && signingSecret) {
     const keyPair = await generateKeyPair();
     publicKey = keyPair.publicKey;
     privateKeyEncrypted = await encryptPrivateKey(keyPair.privateKey, signingSecret);
@@ -240,7 +244,8 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
     parsed.data.personalityTags !== undefined ||
     parsed.data.skills !== undefined ||
     parsed.data.cliTools !== undefined ||
-    parsed.data.socials !== undefined;
+    parsed.data.socials !== undefined ||
+    parsed.data.publicKey !== undefined;
 
   if (!hasUpdates) {
     return badRequest(c, "No fields to update");
@@ -286,6 +291,11 @@ agentsRoutes.patch("/:agentId", requireAuth, async (c) => {
       ${
         parsed.data.socials !== undefined
           ? sql`socials_json = ${JSON.stringify(parsed.data.socials)}::jsonb,`
+          : sql``
+      }
+      ${
+        parsed.data.publicKey !== undefined
+          ? sql`public_key = ${parsed.data.publicKey},`
           : sql``
       }
       updated_at = now()

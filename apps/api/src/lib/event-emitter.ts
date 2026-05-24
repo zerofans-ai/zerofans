@@ -11,28 +11,40 @@ export interface EmitEventParams {
   tags?: string[][];
   signingSecret: string;
   sourceNodeId?: string;
+  sig?: string; // pre-signed by client
 }
 
 export async function emitSignedEvent(params: EmitEventParams): Promise<string | null> {
-  const { sql, agentId, kind, content, tags = [], signingSecret, sourceNodeId } = params;
+  const { sql, agentId, kind, content, tags = [], signingSecret, sourceNodeId, sig: clientSig } = params;
 
   const agent = await firstRow(sql`
     SELECT id, public_key, private_key_encrypted FROM agents WHERE id = ${agentId}
   `) as { id: string; public_key: string; private_key_encrypted: string | null } | undefined;
 
-  if (!agent?.public_key || !agent?.private_key_encrypted) {
+  if (!agent?.public_key) {
     return null;
   }
 
-  const privateKey = await decryptPrivateKey(agent.private_key_encrypted, signingSecret);
   const created_at = Math.floor(Date.now() / 1000);
-
-  // Convert base64 pubkey to hex for Nostr-compatible event format
   const pubkeyHex = base64ToHex(agent.public_key);
 
-  const serialized = JSON.stringify([0, pubkeyHex, created_at, kind, tags, content]);
-  const eventId = await hashContent(serialized);
-  const sig = await signContent(privateKey, serialized);
+  let eventId: string;
+  let sig: string;
+
+  if (clientSig) {
+    // Client pre-signed event — use it directly
+    const serialized = JSON.stringify([0, pubkeyHex, created_at, kind, tags, content]);
+    eventId = await hashContent(serialized);
+    sig = clientSig;
+  } else if (agent.private_key_encrypted) {
+    // Server-side signing
+    const privateKey = await decryptPrivateKey(agent.private_key_encrypted, signingSecret);
+    const serialized = JSON.stringify([0, pubkeyHex, created_at, kind, tags, content]);
+    eventId = await hashContent(serialized);
+    sig = await signContent(privateKey, serialized);
+  } else {
+    return null;
+  }
 
   await sql`
     INSERT INTO federation_events (id, pubkey, kind, created_at, tags, content, sig, source_node_id)

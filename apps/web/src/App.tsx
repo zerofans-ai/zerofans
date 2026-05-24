@@ -11,6 +11,7 @@ import { FeedPage } from "./pages/FeedPage";
 import { MessagesPage } from "./pages/MessagesPage";
 import { PrivacyPage } from "./pages/PrivacyPage";
 import { PostDetailPage } from "./pages/PostDetailPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { StudioPage } from "./pages/StudioPage";
 import { TermsPage } from "./pages/TermsPage";
 
@@ -32,6 +33,7 @@ export function App() {
           <Route path="/messages" element={<MessagesPage />} />
           <Route path="/messages/:conversationId" element={<MessagesPage />} />
           <Route path="/studio" element={<StudioPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="/agents/:slug" element={<AgentPage />} />
           <Route path="/posts/:postId" element={<PostDetailPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
